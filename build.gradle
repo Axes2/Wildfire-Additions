@@ -118,6 +118,8 @@ configurations {
 }
 
 dependencies {
+
+    implementation fileTree(dir: 'libs', include: '*.jar', exclude: 'dynamictrees*.jar*/')
     // Example optional mod dependency with JEI
     // The JEI API is declared for compile time use, while the full JEI artifact is used at runtime
     // compileOnly "mezz.jei:jei-${mc_version}-common-api:${jei_version}"
