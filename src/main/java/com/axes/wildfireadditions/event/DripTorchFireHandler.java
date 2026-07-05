@@ -29,11 +29,17 @@ import java.util.Set;
  * Three guarantees make that safe, all built on facts from PMWeather's own {@code PMWFireBlock}:
  *
  * <ul>
- *   <li><b>Never climbs into trees.</b> {@code PMWFireBlock.canBurnOn} refuses leaves/logs below
- *       intensity 4, and native spread only triggers at {@code intensity > 2}. We cap every ember
- *       we plant at intensity {@value #CAP}, which is below both thresholds - so our fire can neither
- *       ignite a tree directly nor use PMWeather's own spread to seed uncapped children that later
- *       could. Every burning block that exists because of the drip torch is one we planted and clamp.</li>
+ *   <li><b>Never climbs into trees, and never triggers native (wind-biased) spread.</b>
+ *       {@code PMWFireBlock.canBurnOn} refuses leaves/logs below intensity 4, and native spread only
+ *       triggers at {@code intensity > 2}. Critically, {@code randomTick} increments intensity and
+ *       checks that spread condition in the <i>same call</i>, before we ever get a chance to intervene:
+ *       {@code intensity += random.nextInt(1, clamp(intensity + 1, 2, 11))}. Capping at {@value #CAP}
+ *       makes that same-tick bump land on exactly {@code clamp(1+1,2,11)=2} -> {@code nextInt(1,2)} has
+ *       only one possible outcome, 1 -> intensity deterministically becomes 2, and {@code 2 > 2} is
+ *       false. So the wind-biased spread can never fire from one of our embers, not even for a single
+ *       tick - it isn't just clamped back down after the fact, it's mathematically unreachable. (A cap
+ *       of 2 looked safe but wasn't: that same increment can reach 3 or 4 in one call, which *does*
+ *       satisfy the spread check before our own clamp ever runs.)</li>
  *   <li><b>Burns toward the wildfire, not away.</b> Since native spread is disabled by the cap, the
  *       fire only advances via our own creep, which steps embers toward the nearest genuine wildfire
  *       block (gated on the chunk actually carrying fire, via PMWeather's STABLE_FIRE_INTENSITY).</li>
@@ -45,13 +51,17 @@ import java.util.Set;
 @EventBusSubscriber(modid = WildfireAdditions.MODID)
 public class DripTorchFireHandler {
 
-    public static final int START_INTENSITY = 2;
-    private static final int CAP = 2; // Must stay <= 2: disables native spread and can't ignite trees.
+    public static final int START_INTENSITY = 1;
+    // MUST stay 1. See the class doc: randomTick's own same-call intensity bump can reach at most
+    // clamp(CAP+1,2,11) afterwards, and that must not exceed 2 or native (wind-biased) spread can
+    // fire before we ever get a chance to clamp it back down. CAP=1 is the only value where that's
+    // guaranteed rather than merely likely.
+    private static final int CAP = 1;
     private static final int MAX_EMBERS = 220; // Per-level safety bound against runaway tracking.
 
-    // Clamp every tick: PMWeather's random tick can briefly grow an ember above the cap, and a
-    // second random tick in that window would re-enable native spread. Capping every tick shrinks
-    // that window to nothing, keeping the "can't seed uncapped fire" guarantee airtight.
+    // Cheap defense-in-depth: re-clamp every tick in case of any other growth path we haven't
+    // accounted for. The actual wind-spread guarantee above doesn't depend on this running often -
+    // it holds even if this handler never ran at all.
     private static final int CLAMP_PERIOD = 1; // Ticks between clamp/prune/merge passes.
     private static final int CREEP_PERIOD = 10; // Ticks between directed-spread passes.
     private static final int CREEP_BUDGET = 16; // Max embers that attempt to creep per pass.
