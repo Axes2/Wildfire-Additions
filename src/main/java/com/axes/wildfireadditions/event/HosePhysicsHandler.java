@@ -28,6 +28,12 @@ public class HosePhysicsHandler {
     private static final double MAX_HOSE_LENGTH = 50.0;
     private static final Map<UUID, HoseState> ACTIVE_HOSES = new HashMap<>();
 
+    // The point the hose actually connects to: just above the pump box, outside its solid collision box.
+    // Must match the anchor used by HoseRenderHandler so physics and rendering agree on where the hose starts.
+    public static Vec3 getPumpAnchor(BlockPos pumpPos) {
+        return Vec3.atBottomCenterOf(pumpPos).add(0, 1.0, 0);
+    }
+
     public static class HoseState {
         public BlockPos pumpPos;
         public List<Vec3> nodes = new ArrayList<>();
@@ -35,7 +41,7 @@ public class HosePhysicsHandler {
 
         public HoseState(BlockPos pumpPos, Vec3 startPos) {
             this.pumpPos = pumpPos;
-            this.nodes.add(Vec3.atCenterOf(pumpPos));
+            this.nodes.add(getPumpAnchor(pumpPos));
             this.lastValidPlayerPos = startPos;
         }
     }
@@ -74,14 +80,13 @@ public class HosePhysicsHandler {
 
     private static void processHosePhysics(Player player, Level level, ItemStack hoseStack, HoseState state) {
         Vec3 playerEye = player.getEyePosition();
-        Vec3 lastNode = state.nodes.getLast();
         int previousNodeCount = state.nodes.size(); // Track to see if we add/remove a corner
 
         double totalLength = 0;
         for (int i = 0; i < state.nodes.size() - 1; i++) {
             totalLength += state.nodes.get(i).distanceTo(state.nodes.get(i + 1));
         }
-        totalLength += lastNode.distanceTo(player.position());
+        totalLength += state.nodes.getLast().distanceTo(player.position());
 
         if (totalLength > MAX_HOSE_LENGTH) {
             player.addEffect(new MobEffectInstance(MobEffects.MOVEMENT_SLOWDOWN, 20, 4, false, false, false));
@@ -92,22 +97,27 @@ public class HosePhysicsHandler {
             }
         }
 
-        HitResult losResult = level.clip(new ClipContext(playerEye, lastNode, ClipContext.Block.COLLIDER, ClipContext.Fluid.NONE, player));
-        boolean hasLOS = losResult.getType() == HitResult.Type.MISS;
+        // UNTANGLE: keep collapsing trailing corners as long as the player can see past them.
+        // This can remove several kinks in a single tick, so the hose fully unwraps once it's clear
+        // instead of shedding a single corner per tick (which left ghost kinks behind on complex geometry).
+        while (state.nodes.size() > 1) {
+            Vec3 candidate = state.nodes.get(state.nodes.size() - 2);
+            if (hasClearLineOfSight(level, player, playerEye, candidate)) {
+                state.nodes.removeLast();
+            } else {
+                break;
+            }
+        }
+
+        Vec3 lastNode = state.nodes.getLast();
+        boolean hasLOS = hasClearLineOfSight(level, player, playerEye, lastNode);
 
         if (hasLOS) {
             state.lastValidPlayerPos = player.position();
-            if (state.nodes.size() > 1) {
-                Vec3 secondToLastNode = state.nodes.get(state.nodes.size() - 2);
-                HitResult untangleResult = level.clip(new ClipContext(playerEye, secondToLastNode, ClipContext.Block.COLLIDER, ClipContext.Fluid.NONE, player));
-                if (untangleResult.getType() == HitResult.Type.MISS) {
-                    state.nodes.removeLast();
-                }
-            }
-        } else {
-            if (state.lastValidPlayerPos.distanceTo(lastNode) > 1.5) {
-                state.nodes.add(state.lastValidPlayerPos);
-            }
+        } else if (state.lastValidPlayerPos.distanceTo(lastNode) > 1.5) {
+            // Drop the new corner onto the ground beneath where the hose was last taut,
+            // so the hose lays on the terrain instead of floating at the player's eye/waist height.
+            state.nodes.add(snapToGround(level, state.lastValidPlayerPos));
         }
 
         // IF THE NODES CHANGED, SAVE THEM TO THE ITEM DATA FOR THE RENDERER
@@ -133,6 +143,32 @@ public class HosePhysicsHandler {
                 snapHose(player, hoseStack);
             }
         }
+    }
+
+    // Traces from `from` to `to`, pulling the endpoint back slightly so a destination that sits
+    // exactly on (or just inside) a block's surface - e.g. a corner resting on the ground - doesn't
+    // register as blocking itself.
+    private static boolean hasClearLineOfSight(Level level, Player player, Vec3 from, Vec3 to) {
+        Vec3 direction = to.subtract(from);
+        double distance = direction.length();
+        if (distance < 1.0E-4) return true;
+
+        Vec3 adjustedTo = from.add(direction.normalize().scale(Math.max(0, distance - 0.1)));
+        HitResult result = level.clip(new ClipContext(from, adjustedTo, ClipContext.Block.COLLIDER, ClipContext.Fluid.NONE, player));
+        return result.getType() == HitResult.Type.MISS;
+    }
+
+    // Pulls a newly placed corner down onto the nearest solid ground beneath it, so the hose rests
+    // on the terrain rather than floating at whatever height the player happened to be standing.
+    private static Vec3 snapToGround(Level level, Vec3 pos) {
+        BlockPos columnTop = BlockPos.containing(pos.x, pos.y, pos.z);
+        for (int i = 0; i < 5; i++) {
+            BlockPos check = columnTop.below(i);
+            if (!level.getBlockState(check).getCollisionShape(level, check).isEmpty()) {
+                return new Vec3(pos.x, check.getY() + 1.0, pos.z);
+            }
+        }
+        return pos;
     }
 
     private static void snapHose(Player player, ItemStack hoseStack) {

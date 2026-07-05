@@ -54,7 +54,7 @@ public class HoseRenderHandler {
 
         // Build the list of physical nodes
         List<Vec3> renderNodes = new ArrayList<>();
-        renderNodes.add(Vec3.atBottomCenterOf(BlockPos.of(tag.getLong("PumpPos"))).add(0, 1.0, 0)); // Start at Pump
+        renderNodes.add(HosePhysicsHandler.getPumpAnchor(BlockPos.of(tag.getLong("PumpPos")))); // Start at Pump
 
         if (tag.contains("HoseNodes")) {
             ListTag nodesList = tag.getList("HoseNodes", Tag.TAG_COMPOUND);
