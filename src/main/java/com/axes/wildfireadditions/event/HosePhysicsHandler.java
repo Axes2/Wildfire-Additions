@@ -28,6 +28,7 @@ public class HosePhysicsHandler {
 
     private static final double MAX_HOSE_LENGTH = 50.0;
     private static final int MAX_NODES = 48; // Safety cap so pathological geometry can't grow the chain forever
+    private static final double REJOIN_RADIUS = 1.0; // Standing this close to a kink counts as having retraced past it
     private static final Map<UUID, HoseState> ACTIVE_HOSES = new HashMap<>();
 
     // The point the hose actually connects to: just above the pump box, outside its solid collision box.
@@ -81,7 +82,6 @@ public class HosePhysicsHandler {
     }
 
     private static void processHosePhysics(Player player, Level level, ItemStack hoseStack, HoseState state) {
-        Vec3 playerEye = player.getEyePosition();
         int previousNodeCount = state.nodes.size(); // Track to see if we add/remove a corner
 
         double totalLength = 0;
@@ -99,12 +99,18 @@ public class HosePhysicsHandler {
             }
         }
 
-        // UNTANGLE: keep collapsing trailing corners as long as the player can see past them.
-        // This can remove several kinks in a single tick, so the hose fully unwraps once it's clear
-        // instead of shedding a single corner per tick (which left ghost kinks behind on complex geometry).
+        // UNTANGLE: keep collapsing trailing corners as long as the player can see past them, OR the
+        // player has physically walked back to (within REJOIN_RADIUS of) the kink itself. The pure
+        // line-of-sight check alone made backtracking finicky - a low fence, a slab, or foliage that
+        // only blocks the eye-height ray (not the actual ground-hugging hose) could keep a kink from
+        // ever releasing even when standing right on top of it. Either signal is enough to shed a
+        // corner, and this can release several kinks in one tick so the hose fully unwraps at once
+        // instead of shedding a single corner per tick and leaving ghost kinks behind.
         while (state.nodes.size() > 1) {
+            Vec3 last = state.nodes.getLast();
             Vec3 candidate = state.nodes.get(state.nodes.size() - 2);
-            if (hasClearLineOfSight(level, player, playerEye, candidate)) {
+            boolean rejoinedAtKink = player.position().distanceTo(last) < REJOIN_RADIUS;
+            if (rejoinedAtKink || playerHasRouteTo(level, player, candidate)) {
                 state.nodes.removeLast();
             } else {
                 break;
@@ -119,7 +125,7 @@ public class HosePhysicsHandler {
         fixIntermediateCollisions(level, player, state);
 
         Vec3 lastNode = state.nodes.getLast();
-        boolean hasLOS = hasClearLineOfSight(level, player, playerEye, lastNode);
+        boolean hasLOS = playerHasRouteTo(level, player, lastNode);
 
         if (hasLOS) {
             state.lastValidPlayerPos = player.position();
@@ -217,6 +223,16 @@ public class HosePhysicsHandler {
         double dx = a.x - b.x;
         double dz = a.z - b.z;
         return Math.sqrt(dx * dx + dz * dz);
+    }
+
+    // Whether the player could route the hose directly to `target` from where they're standing.
+    // Checked at both eye height and near ground level: the hose itself hugs the ground, so
+    // something that only blocks the eye-height ray (a low fence, a slab, foliage, a sign) shouldn't
+    // be the sole reason a kink is created, or the sole reason it refuses to release.
+    private static boolean playerHasRouteTo(Level level, Player player, Vec3 target) {
+        if (hasClearLineOfSight(level, player, player.getEyePosition(), target)) return true;
+        Vec3 groundLevel = player.position().add(0, 0.2, 0);
+        return hasClearLineOfSight(level, player, groundLevel, target);
     }
 
     // Traces from `from` to `to`, pulling both ends back slightly so a point that sits exactly on
