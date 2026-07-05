@@ -21,6 +21,10 @@ import net.minecraft.world.phys.BlockHitResult;
 import net.minecraft.world.phys.HitResult;
 import net.minecraft.world.phys.Vec3;
 
+import java.util.HashMap;
+import java.util.Map;
+import java.util.UUID;
+
 public class HoseItem extends Item {
 
     // Ballistic constants for the water stream. Tuned so a level shot from head height reaches
@@ -29,13 +33,22 @@ public class HoseItem extends Item {
     // from up high extends the reach further since the water has longer to fall before it lands -
     // all an emergent result of simulating the arc rather than a straight ray.
     private static final double STREAM_SPEED = 22.0; // blocks/second, nozzle exit speed
-    private static final double STREAM_SPEED_PER_TICK = STREAM_SPEED / 20.0; // for particle velocity args
     private static final double GRAVITY = 16.0; // blocks/second^2 applied to the stream's fall
     private static final double MAX_RANGE = 20.0; // straight-line distance from the nozzle before the stream dissipates
     private static final double STEP_DT = 0.025; // simulation resolution, in seconds
     private static final int MAX_STEPS = 400; // hard safety cap (10s of flight time), should never actually be hit
-    private static final double PARTICLE_SPREAD_DEGREES = 5.0; // how far an individual droplet can drift off-aim
-    private static final int PARTICLES_PER_BURST = 6; // droplets launched from the nozzle per pass
+
+    private static final int TICK_INTERVAL = 2; // how often onUseTick's logic actually runs
+    private static final double PASS_SECONDS = TICK_INTERVAL / 20.0; // real time between passes
+    private static final double DROPLET_TRAIL_SPACING = 0.035; // seconds of flight time between trailing droplets
+    private static final int DROPLET_TRAIL_LENGTH = 5; // droplets drawn per pass, including the lead one
+    private static final double SPREAD_NEAR_NOZZLE = 0.03; // blocks of positional jitter right at the nozzle
+    private static final double SPREAD_AT_TARGET = 0.15; // blocks of positional jitter by the time it lands
+
+    // Client-side only: how far (in seconds of simulated flight time) the visible "lead" droplet
+    // has advanced along the current arc for each player, so the stream is drawn as continuously
+    // travelling instead of being redrawn from scratch, all at once, every pass.
+    private static final Map<UUID, Double> STREAM_PROGRESS = new HashMap<>();
 
     public HoseItem(Properties properties) {
         super(properties);
@@ -71,30 +84,44 @@ public class HoseItem extends Item {
         if (!(livingEntity instanceof Player player)) return;
 
         // Run logic every 2 ticks to balance performance and responsiveness
-        if (player.tickCount % 2 != 0) return;
+        if (player.tickCount % TICK_INTERVAL != 0) return;
 
         Vec3 eyePos = player.getEyePosition();
         Vec3 lookVec = player.getLookAngle();
 
-        // Client-side: launch real particles from the nozzle with real velocity and let vanilla's
-        // own particle physics (gravity + block collision) carry them through the air. This is what
-        // actually reads as water being shot out - hand-placing particles along the whole simulated
-        // arc every pass (the previous approach) drew the entire stream at once, which looked like it
-        // teleported from the nozzle to the target instead of travelling there.
+        // Client-side: hand-place FALLING_WATER particles directly along the real simulated arc -
+        // this is fully deterministic and always visible, unlike giving vanilla's own particle
+        // physics a velocity and letting it fly (SPLASH turned out not to render as a travelling
+        // droplet at all - it's built for a quick impact flash, not sustained flight).
         //
-        // The hit-detection trace below is completely separate and invisible - it never spawns
-        // anything - so the two can disagree slightly on exactly where the water "lands" without it
-        // being visible. We only re-use it here to place a splash burst at the real impact point, so
-        // that piece of feedback still lines up with where the fire is actually being cooled.
+        // To avoid redrawing the whole arc at once every pass (which looked like the stream
+        // teleported into existence), only a short trailing cluster of droplets is drawn each pass,
+        // positioned by how far a "lead" droplet has travelled in simulated flight time so far. That
+        // progress advances every pass and loops once it reaches the target, giving the appearance of
+        // continuous flow using only deterministic, hand-placed positions.
         if (level.isClientSide()) {
-            for (int i = 0; i < PARTICLES_PER_BURST; i++) {
-                Vec3 dir = jitterDirection(lookVec, level, PARTICLE_SPREAD_DEGREES);
-                double speed = STREAM_SPEED_PER_TICK * (0.85 + level.random.nextDouble() * 0.3);
-                Vec3 velocity = dir.scale(speed);
-                level.addParticle(ParticleTypes.SPLASH, eyePos.x, eyePos.y, eyePos.z, velocity.x, velocity.y, velocity.z);
+            TrajectoryResult trajectory = traceTrajectory(level, player, eyePos, lookVec);
+            double flightTime = Math.max(trajectory.flightTime(), 0.001);
+
+            double progress = STREAM_PROGRESS.merge(player.getUUID(), PASS_SECONDS, Double::sum);
+            if (progress > flightTime) {
+                progress %= flightTime;
+                STREAM_PROGRESS.put(player.getUUID(), progress);
             }
 
-            TrajectoryResult trajectory = traceTrajectory(level, player, eyePos, lookVec);
+            for (int i = 0; i < DROPLET_TRAIL_LENGTH; i++) {
+                double t = progress - i * DROPLET_TRAIL_SPACING;
+                if (t < 0) break;
+
+                Vec3 point = positionAtTime(eyePos, lookVec, t);
+                double spread = SPREAD_NEAR_NOZZLE + (t / flightTime) * (SPREAD_AT_TARGET - SPREAD_NEAR_NOZZLE);
+                point = jitterPerpendicular(point, lookVec, level, spread);
+
+                level.addParticle(ParticleTypes.FALLING_WATER, point.x, point.y, point.z, 0.0, 0.0, 0.0);
+            }
+
+            // A little burst right where the stream actually lands, so this piece of feedback stays
+            // in sync with where the fire is really being cooled (see the server branch below).
             if (trajectory.hitBlock() != null) {
                 Vec3 impact = trajectory.endPosition();
                 level.addParticle(ParticleTypes.SPLASH, impact.x, impact.y, impact.z, 0.0, 0.1, 0.0);
@@ -162,23 +189,34 @@ public class HoseItem extends Item {
         }
     }
 
-    // Rotates `direction` by a small random angle (up to `maxAngleDegrees` on each axis) so a
-    // stream of droplets fired down the same look vector fans out slightly instead of forming a
-    // perfectly tight beam.
-    private static Vec3 jitterDirection(Vec3 direction, Level level, double maxAngleDegrees) {
+    // Nudges `point` sideways by a small random amount, perpendicular to `direction`, so the
+    // hand-placed droplets read as a bit of a spray rather than a perfectly straight line of dots.
+    private static Vec3 jitterPerpendicular(Vec3 point, Vec3 direction, Level level, double magnitude) {
         Vec3 up = Math.abs(direction.y) > 0.99 ? new Vec3(1, 0, 0) : new Vec3(0, 1, 0);
         Vec3 right = direction.cross(up).normalize();
         Vec3 trueUp = right.cross(direction).normalize();
 
-        double yaw = Math.toRadians((level.random.nextDouble() - 0.5) * 2.0 * maxAngleDegrees);
-        double pitch = Math.toRadians((level.random.nextDouble() - 0.5) * 2.0 * maxAngleDegrees);
+        double rx = (level.random.nextDouble() - 0.5) * 2.0 * magnitude;
+        double ry = (level.random.nextDouble() - 0.5) * 2.0 * magnitude;
 
-        return direction.add(right.scale(Math.tan(yaw))).add(trueUp.scale(Math.tan(pitch))).normalize();
+        return point.add(right.scale(rx)).add(trueUp.scale(ry));
     }
 
     // Where a simulated water arc ends up: either the block it hit, or its last position before
-    // dissipating past MAX_RANGE (hitBlock null in that case).
-    private record TrajectoryResult(Vec3 endPosition, BlockPos hitBlock) {
+    // dissipating past MAX_RANGE (hitBlock null in that case), and how long (in simulated seconds)
+    // it took to get there.
+    private record TrajectoryResult(Vec3 endPosition, BlockPos hitBlock, double flightTime) {
+    }
+
+    // The position of the stream at flight time `t`, assuming a clear path - only valid for
+    // t <= a trace's own flightTime, since that's the only span guaranteed collision-free.
+    private static Vec3 positionAtTime(Vec3 origin, Vec3 direction, double t) {
+        Vec3 dir = direction.normalize();
+        return new Vec3(
+                origin.x + dir.x * STREAM_SPEED * t,
+                origin.y + dir.y * STREAM_SPEED * t - 0.5 * GRAVITY * t * t,
+                origin.z + dir.z * STREAM_SPEED * t
+        );
     }
 
     // Simulates the water as a gravity-affected projectile instead of an instant straight ray, so
@@ -191,21 +229,22 @@ public class HoseItem extends Item {
         Vec3 velocity = direction.normalize().scale(STREAM_SPEED);
 
         for (int step = 0; step < MAX_STEPS; step++) {
+            double elapsed = step * STEP_DT;
             Vec3 nextPos = pos.add(velocity.scale(STEP_DT));
 
             if (nextPos.distanceTo(origin) > MAX_RANGE) {
-                return new TrajectoryResult(pos, null);
+                return new TrajectoryResult(pos, null, elapsed);
             }
 
             HitResult hit = level.clip(new ClipContext(pos, nextPos, ClipContext.Block.COLLIDER, ClipContext.Fluid.NONE, player));
             if (hit.getType() == HitResult.Type.BLOCK) {
                 BlockHitResult blockHit = (BlockHitResult) hit;
-                return new TrajectoryResult(blockHit.getLocation(), blockHit.getBlockPos());
+                return new TrajectoryResult(blockHit.getLocation(), blockHit.getBlockPos(), elapsed + STEP_DT);
             }
 
             pos = nextPos;
             velocity = velocity.add(0, -GRAVITY * STEP_DT, 0);
         }
-        return new TrajectoryResult(pos, null);
+        return new TrajectoryResult(pos, null, MAX_STEPS * STEP_DT);
     }
 }
