@@ -1,6 +1,7 @@
 package com.axes.wildfireadditions.registry;
 
 import com.axes.wildfireadditions.WildfireAdditions;
+import com.axes.wildfireadditions.item.DripTorchItem;
 import com.axes.wildfireadditions.item.HoseItem;
 import net.minecraft.world.item.BlockItem;
 import net.minecraft.world.item.Item;
@@ -15,4 +16,7 @@ public class ModItems {
 
     public static final DeferredItem<Item> HOSE = ITEMS.register("hose",
             () -> new HoseItem(new Item.Properties().stacksTo(1)));
+
+    public static final DeferredItem<Item> DRIP_TORCH = ITEMS.register("drip_torch",
+            () -> new DripTorchItem(new Item.Properties().stacksTo(1)));
 }
