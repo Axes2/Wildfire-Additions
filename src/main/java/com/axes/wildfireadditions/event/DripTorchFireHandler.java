@@ -7,6 +7,7 @@ import dev.protomanly.pmweather.data.DataAttachments;
 import net.minecraft.core.BlockPos;
 import net.minecraft.resources.ResourceKey;
 import net.minecraft.server.level.ServerLevel;
+import net.minecraft.world.level.ChunkPos;
 import net.minecraft.world.level.Level;
 import net.minecraft.world.level.block.state.BlockState;
 import net.minecraft.world.level.chunk.ChunkAccess;
@@ -40,9 +41,16 @@ import java.util.Set;
  *       tick - it isn't just clamped back down after the fact, it's mathematically unreachable. (A cap
  *       of 2 looked safe but wasn't: that same increment can reach 3 or 4 in one call, which *does*
  *       satisfy the spread check before our own clamp ever runs.)</li>
- *   <li><b>Burns toward the wildfire, not away.</b> Since native spread is disabled by the cap, the
- *       fire only advances via our own creep, which steps embers toward the nearest genuine wildfire
- *       block (gated on the chunk actually carrying fire, via PMWeather's STABLE_FIRE_INTENSITY).</li>
+ *   <li><b>Burns toward the wildfire, not away - at real wildfire range.</b> Since native spread is
+ *       disabled by the cap, the fire only advances via our own creep, in two tiers. Up close, it steps
+ *       toward the nearest actual (untracked) fire block, for precise final approach and merging. At
+ *       long range - a real wildfire can be well over 100 blocks off - checking individual blocks
+ *       would mean millions of lookups, so instead we read PMWeather's own per-chunk
+ *       STABLE_FIRE_INTENSITY (the same coarse, pre-aggregated "how much fire is around here" signal
+ *       WindEngine itself samples to bias wind toward fires) across a wide grid of chunks - roughly
+ *       200 cheap lookups instead of millions of block checks - and creep toward the nearest chunk
+ *       that's actually carrying fire. Only chunks the server already has loaded are read, so this
+ *       never forces distant chunks to load just to peek at them.</li>
  *   <li><b>Merges seamlessly.</b> Our embers are real {@code PMWFireBlock}s, so when one reaches the
  *       wildfire we simply stop tracking it - no override, no reset. From that moment it's an
  *       ordinary wildfire block that grows and behaves like any other.</li>
@@ -65,11 +73,19 @@ public class DripTorchFireHandler {
     private static final int CLAMP_PERIOD = 1; // Ticks between clamp/prune/merge passes.
     private static final int CREEP_PERIOD = 10; // Ticks between directed-spread passes.
     private static final int CREEP_BUDGET = 16; // Max embers that attempt to creep per pass.
-    private static final int CREEP_STEP = 2; // Blocks advanced toward the fire per creep.
 
-    private static final int SCAN_RADIUS = 10; // Horizontal reach when looking for the wildfire.
-    private static final int SCAN_VERTICAL = 4; // Vertical reach, to find fire on slopes.
+    // Fine tier: precise steering once a real fire block is within reach. Kept small - it's a
+    // per-block scan - since its only job now is short-range precision, not long-range sensing.
+    private static final int FINE_SCAN_RADIUS = 10; // Horizontal reach, in blocks.
+    private static final int FINE_SCAN_VERTICAL = 4; // Vertical reach, in blocks (fire on slopes).
+    private static final int FINE_CREEP_STEP = 2; // Blocks advanced per creep at this tier.
+
+    // Coarse tier: long-range sensing via per-chunk data instead of per-block, so a wildfire that's
+    // realistically far away (100+ blocks) can still be detected and headed towards affordably.
+    private static final int LONG_RANGE_CHUNK_RADIUS = 7; // ~112 blocks; chunks, not blocks.
     private static final float CHUNK_FIRE_THRESHOLD = 0.75f; // Min STABLE_FIRE_INTENSITY to bother creeping.
+    private static final int LONG_RANGE_CREEP_STEP = 6; // Bigger leaps while just heading in-general.
+
     private static final int MAX_STEP_HEIGHT = 3; // Don't let the fire creep up/down cliffs.
 
     private static final Map<ResourceKey<Level>, Set<BlockPos>> EMBERS = new HashMap<>();
@@ -138,8 +154,9 @@ public class DripTorchFireHandler {
         set.removeAll(toRemove);
     }
 
-    // Advances the burning front toward the wildfire, one modest step at a time, but only from embers
-    // whose chunk (or a neighbour) actually carries wildfire - so with no fire around, nothing spreads.
+    // Advances the burning front toward the wildfire, one modest step at a time. Tries precise
+    // (fine, block-level) targeting first; if nothing's close enough for that, falls back to coarse
+    // (chunk-level) sensing so a wildfire well over 100 blocks away can still pull the fire toward it.
     private static void creepTowardFire(ServerLevel level, Set<BlockPos> set) {
         if (set.size() >= MAX_EMBERS) return;
 
@@ -148,25 +165,38 @@ public class DripTorchFireHandler {
 
         for (BlockPos ember : frontier) {
             if (attempts >= CREEP_BUDGET || set.size() >= MAX_EMBERS) break;
-            if (maxNearbyChunkFire(level, ember) < CHUNK_FIRE_THRESHOLD) continue;
 
-            BlockPos fire = findNearestWildfire(level, set, ember);
-            if (fire == null) continue;
+            BlockPos fineTarget = findNearestWildfire(level, set, ember);
+            if (fineTarget != null) {
+                attempts++;
+                stepToward(level, ember, fineTarget.getX(), fineTarget.getZ(), FINE_CREEP_STEP);
+                continue;
+            }
+
+            ChunkPos hotChunk = findNearestHotChunk(level, ember);
+            if (hotChunk == null) continue; // No fire detectable at any range - stay put.
             attempts++;
 
-            double dx = fire.getX() - ember.getX();
-            double dz = fire.getZ() - ember.getZ();
-            if (dx * dx + dz * dz <= 2.5) continue; // Already touching - merge handles it.
-
-            int tx = ember.getX() + (int) Math.signum(dx) * CREEP_STEP;
-            int tz = ember.getZ() + (int) Math.signum(dz) * CREEP_STEP;
-
-            // Drop onto whatever ground is actually there (follows terrain instead of floating).
-            BlockPos top = level.getHeightmapPos(Heightmap.Types.MOTION_BLOCKING_NO_LEAVES, new BlockPos(tx, 0, tz));
-            if (Math.abs(top.getY() - ember.getY()) > MAX_STEP_HEIGHT) continue;
-
-            plantEmber(level, top);
+            int targetX = hotChunk.x * 16 + 8;
+            int targetZ = hotChunk.z * 16 + 8;
+            stepToward(level, ember, targetX, targetZ, LONG_RANGE_CREEP_STEP);
         }
+    }
+
+    // Plants one new ember stepSize blocks closer to (targetX, targetZ), dropped onto whatever
+    // ground is actually there (follows terrain instead of floating).
+    private static void stepToward(ServerLevel level, BlockPos ember, int targetX, int targetZ, int stepSize) {
+        double dx = targetX - ember.getX();
+        double dz = targetZ - ember.getZ();
+        if (dx * dx + dz * dz <= 2.5) return; // Already there - merge handles it.
+
+        int tx = ember.getX() + (int) Math.signum(dx) * stepSize;
+        int tz = ember.getZ() + (int) Math.signum(dz) * stepSize;
+
+        BlockPos top = level.getHeightmapPos(Heightmap.Types.MOTION_BLOCKING_NO_LEAVES, new BlockPos(tx, 0, tz));
+        if (Math.abs(top.getY() - ember.getY()) > MAX_STEP_HEIGHT) return;
+
+        plantEmber(level, top);
     }
 
     private static boolean isAdjacentToWildfire(ServerLevel level, Set<BlockPos> set, BlockPos pos) {
@@ -190,9 +220,9 @@ public class DripTorchFireHandler {
         BlockPos best = null;
         long bestDist = Long.MAX_VALUE;
 
-        for (int dx = -SCAN_RADIUS; dx <= SCAN_RADIUS; dx++) {
-            for (int dz = -SCAN_RADIUS; dz <= SCAN_RADIUS; dz++) {
-                for (int dy = -SCAN_VERTICAL; dy <= SCAN_VERTICAL; dy++) {
+        for (int dx = -FINE_SCAN_RADIUS; dx <= FINE_SCAN_RADIUS; dx++) {
+            for (int dz = -FINE_SCAN_RADIUS; dz <= FINE_SCAN_RADIUS; dz++) {
+                for (int dy = -FINE_SCAN_VERTICAL; dy <= FINE_SCAN_VERTICAL; dy++) {
                     m.set(origin.getX() + dx, origin.getY() + dy, origin.getZ() + dz);
                     if (!(level.getBlockState(m).getBlock() instanceof PMWFireBlock)) continue;
                     if (set.contains(m)) continue; // One of ours, not the wildfire.
@@ -208,18 +238,35 @@ public class DripTorchFireHandler {
         return best;
     }
 
-    // The strongest STABLE_FIRE_INTENSITY across this ember's chunk and its 8 neighbours - a cheap,
-    // PMWeather-native gate for "is there actually a wildfire near enough to be worth creeping toward".
-    private static float maxNearbyChunkFire(ServerLevel level, BlockPos pos) {
-        int cx = pos.getX() >> 4;
-        int cz = pos.getZ() >> 4;
-        float max = 0.0f;
-        for (int ox = -1; ox <= 1; ox++) {
-            for (int oz = -1; oz <= 1; oz++) {
-                ChunkAccess chunk = level.getChunk(cx + ox, cz + oz);
-                max = Math.max(max, chunk.getData(DataAttachments.STABLE_FIRE_INTENSITY));
+    // Finds the nearest currently-loaded chunk (within LONG_RANGE_CHUNK_RADIUS) whose
+    // STABLE_FIRE_INTENSITY says a wildfire is actually there. This is what lets the fire sense a
+    // blaze 100+ blocks off without scanning individual blocks: PMWeather already maintains this
+    // per-chunk aggregate (WindEngine samples the very same field to bias wind toward fires), so we
+    // just read it directly - about (2*7+1)^2 = 225 cheap lookups instead of millions of block checks.
+    // Chunks the server hasn't loaded are skipped rather than force-loaded, since an unloaded chunk
+    // isn't being simulated anyway - there's no wildfire to detect there even if one existed.
+    private static ChunkPos findNearestHotChunk(ServerLevel level, BlockPos origin) {
+        int originCx = origin.getX() >> 4;
+        int originCz = origin.getZ() >> 4;
+        ChunkPos best = null;
+        long bestDist = Long.MAX_VALUE;
+
+        for (int dcx = -LONG_RANGE_CHUNK_RADIUS; dcx <= LONG_RANGE_CHUNK_RADIUS; dcx++) {
+            for (int dcz = -LONG_RANGE_CHUNK_RADIUS; dcz <= LONG_RANGE_CHUNK_RADIUS; dcz++) {
+                int cx = originCx + dcx;
+                int cz = originCz + dcz;
+                if (!level.hasChunk(cx, cz)) continue;
+
+                ChunkAccess chunk = level.getChunk(cx, cz);
+                if (chunk.getData(DataAttachments.STABLE_FIRE_INTENSITY) < CHUNK_FIRE_THRESHOLD) continue;
+
+                long d = (long) dcx * dcx + (long) dcz * dcz;
+                if (d < bestDist) {
+                    bestDist = d;
+                    best = new ChunkPos(cx, cz);
+                }
             }
         }
-        return max;
+        return best;
     }
 }
