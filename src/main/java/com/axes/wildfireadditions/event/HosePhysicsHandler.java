@@ -14,6 +14,7 @@ import net.minecraft.world.item.ItemStack;
 import net.minecraft.world.item.component.CustomData;
 import net.minecraft.world.level.ClipContext;
 import net.minecraft.world.level.Level;
+import net.minecraft.world.phys.BlockHitResult;
 import net.minecraft.world.phys.HitResult;
 import net.minecraft.world.phys.Vec3;
 import net.neoforged.bus.api.SubscribeEvent;
@@ -26,6 +27,7 @@ import java.util.*;
 public class HosePhysicsHandler {
 
     private static final double MAX_HOSE_LENGTH = 50.0;
+    private static final int MAX_NODES = 48; // Safety cap so pathological geometry can't grow the chain forever
     private static final Map<UUID, HoseState> ACTIVE_HOSES = new HashMap<>();
 
     // The point the hose actually connects to: just above the pump box, outside its solid collision box.
@@ -109,12 +111,19 @@ public class HosePhysicsHandler {
             }
         }
 
+        // MID-CHAIN VALIDATION: the checks above only ever look at the live segment between the
+        // player and the last node. They can't catch a wall that gets built between two corners
+        // that were already placed, or a corner that turned out unnecessary once a later corner
+        // was added. Re-walk the whole established chain every tick to collapse and re-route it.
+        collapseRedundantNodes(level, player, state);
+        fixIntermediateCollisions(level, player, state);
+
         Vec3 lastNode = state.nodes.getLast();
         boolean hasLOS = hasClearLineOfSight(level, player, playerEye, lastNode);
 
         if (hasLOS) {
             state.lastValidPlayerPos = player.position();
-        } else if (state.lastValidPlayerPos.distanceTo(lastNode) > 1.5) {
+        } else if (state.lastValidPlayerPos.distanceTo(lastNode) > 1.5 && state.nodes.size() < MAX_NODES) {
             // Drop the new corner onto the ground beneath where the hose was last taut,
             // so the hose lays on the terrain instead of floating at the player's eye/waist height.
             state.nodes.add(snapToGround(level, state.lastValidPlayerPos));
@@ -145,17 +154,90 @@ public class HosePhysicsHandler {
         }
     }
 
-    // Traces from `from` to `to`, pulling the endpoint back slightly so a destination that sits
-    // exactly on (or just inside) a block's surface - e.g. a corner resting on the ground - doesn't
-    // register as blocking itself.
+    // Removes any established corner whose neighbours can already see each other directly, e.g.
+    // because a later corner rerouted the hose around the same obstacle, or the obstacle is gone.
+    private static void collapseRedundantNodes(Level level, Player player, HoseState state) {
+        List<Vec3> nodes = state.nodes;
+        for (int i = 1; i < nodes.size() - 1; ) {
+            Vec3 prev = nodes.get(i - 1);
+            Vec3 next = nodes.get(i + 1);
+            if (findBlockingHit(level, player, prev, next) == null) {
+                nodes.remove(i);
+            } else {
+                i++;
+            }
+        }
+    }
+
+    // Re-checks every already-placed segment (not just the live one to the player) and, if
+    // something is now in the way, inserts a corner that routes around it. Runs every tick so a
+    // single bad segment self-heals over a couple of ticks even if one inserted corner isn't
+    // enough to fully clear the obstruction.
+    private static void fixIntermediateCollisions(Level level, Player player, HoseState state) {
+        List<Vec3> nodes = state.nodes;
+        int inserted = 0;
+        for (int i = 0; i < nodes.size() - 1 && nodes.size() < MAX_NODES && inserted < 8; i++) {
+            Vec3 a = nodes.get(i);
+            Vec3 b = nodes.get(i + 1);
+            BlockHitResult hit = findBlockingHit(level, player, a, b);
+            if (hit == null) continue;
+
+            Vec3 corner = snapToGround(level, findBypassCorner(a, b, hit.getBlockPos()));
+            // Bail out if the bypass point collapsed onto an existing endpoint - that would just
+            // spin in place instead of making progress towards a valid route.
+            if (corner.distanceTo(a) < 0.2 || corner.distanceTo(b) < 0.2) continue;
+
+            nodes.add(i + 1, corner);
+            inserted++;
+            i--; // Re-examine the new a -> corner segment before moving on
+        }
+    }
+
+    // Picks the corner of the obstructing block's footprint that best routes around it, pushed
+    // out a little so the new node doesn't sit flush against the wall it's wrapping.
+    private static Vec3 findBypassCorner(Vec3 a, Vec3 b, BlockPos hitPos) {
+        double centerX = hitPos.getX() + 0.5;
+        double centerZ = hitPos.getZ() + 0.5;
+        double[][] offsets = {{-0.8, -0.8}, {0.8, -0.8}, {0.8, 0.8}, {-0.8, 0.8}};
+
+        Vec3 best = null;
+        double bestScore = Double.MAX_VALUE;
+        for (double[] offset : offsets) {
+            Vec3 candidate = new Vec3(centerX + offset[0], a.y, centerZ + offset[1]);
+            double score = horizontalDistance(a, candidate) + horizontalDistance(candidate, b);
+            if (score < bestScore) {
+                bestScore = score;
+                best = candidate;
+            }
+        }
+        return best;
+    }
+
+    private static double horizontalDistance(Vec3 a, Vec3 b) {
+        double dx = a.x - b.x;
+        double dz = a.z - b.z;
+        return Math.sqrt(dx * dx + dz * dz);
+    }
+
+    // Traces from `from` to `to`, pulling both ends back slightly so a point that sits exactly on
+    // (or just inside) a block's surface - e.g. a corner resting on the ground - doesn't register
+    // as blocking its own segment.
     private static boolean hasClearLineOfSight(Level level, Player player, Vec3 from, Vec3 to) {
+        return findBlockingHit(level, player, from, to) == null;
+    }
+
+    private static BlockHitResult findBlockingHit(Level level, Player player, Vec3 from, Vec3 to) {
         Vec3 direction = to.subtract(from);
         double distance = direction.length();
-        if (distance < 1.0E-4) return true;
+        if (distance < 1.0E-4) return null;
 
-        Vec3 adjustedTo = from.add(direction.normalize().scale(Math.max(0, distance - 0.1)));
-        HitResult result = level.clip(new ClipContext(from, adjustedTo, ClipContext.Block.COLLIDER, ClipContext.Fluid.NONE, player));
-        return result.getType() == HitResult.Type.MISS;
+        Vec3 unit = direction.normalize();
+        double margin = Math.min(0.1, distance / 2.0);
+        Vec3 adjustedFrom = from.add(unit.scale(margin));
+        Vec3 adjustedTo = to.subtract(unit.scale(margin));
+
+        HitResult result = level.clip(new ClipContext(adjustedFrom, adjustedTo, ClipContext.Block.COLLIDER, ClipContext.Fluid.NONE, player));
+        return result.getType() == HitResult.Type.BLOCK ? (BlockHitResult) result : null;
     }
 
     // Pulls a newly placed corner down onto the nearest solid ground beneath it, so the hose rests
