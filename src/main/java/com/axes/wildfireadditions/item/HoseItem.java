@@ -21,10 +21,6 @@ import net.minecraft.world.phys.BlockHitResult;
 import net.minecraft.world.phys.HitResult;
 import net.minecraft.world.phys.Vec3;
 
-import java.util.HashMap;
-import java.util.Map;
-import java.util.UUID;
-
 public class HoseItem extends Item {
 
     // Ballistic constants for the water stream. Tuned so a level shot from head height reaches
@@ -39,16 +35,14 @@ public class HoseItem extends Item {
     private static final int MAX_STEPS = 400; // hard safety cap (10s of flight time), should never actually be hit
 
     private static final int TICK_INTERVAL = 2; // how often onUseTick's logic actually runs
-    private static final double PASS_SECONDS = TICK_INTERVAL / 20.0; // real time between passes
-    private static final double DROPLET_TRAIL_SPACING = 0.035; // seconds of flight time between trailing droplets
-    private static final int DROPLET_TRAIL_LENGTH = 5; // droplets drawn per pass, including the lead one
-    private static final double SPREAD_NEAR_NOZZLE = 0.03; // blocks of positional jitter right at the nozzle
-    private static final double SPREAD_AT_TARGET = 0.15; // blocks of positional jitter by the time it lands
 
-    // Client-side only: how far (in seconds of simulated flight time) the visible "lead" droplet
-    // has advanced along the current arc for each player, so the stream is drawn as continuously
-    // travelling instead of being redrawn from scratch, all at once, every pass.
-    private static final Map<UUID, Double> STREAM_PROGRESS = new HashMap<>();
+    // Visual stream density/volume. The whole arc (nozzle to impact) is populated with droplets
+    // every single pass - rather than only revealing a small crawling segment of it - so it always
+    // reads as one solid, continuous stream instead of a single clump travelling down the arc.
+    private static final int TIME_SAMPLES_PER_PASS = 14; // points spread evenly along the whole arc
+    private static final int DROPLETS_PER_SAMPLE = 2; // independently-jittered droplets per point, for thickness
+    private static final double SPREAD_NEAR_NOZZLE = 0.05; // blocks of positional jitter right at the nozzle
+    private static final double SPREAD_AT_TARGET = 0.4; // blocks of positional jitter by the time it lands
 
     public HoseItem(Properties properties) {
         super(properties);
@@ -94,30 +88,29 @@ public class HoseItem extends Item {
         // physics a velocity and letting it fly (SPLASH turned out not to render as a travelling
         // droplet at all - it's built for a quick impact flash, not sustained flight).
         //
-        // To avoid redrawing the whole arc at once every pass (which looked like the stream
-        // teleported into existence), only a short trailing cluster of droplets is drawn each pass,
-        // positioned by how far a "lead" droplet has travelled in simulated flight time so far. That
-        // progress advances every pass and loops once it reaches the target, giving the appearance of
-        // continuous flow using only deterministic, hand-placed positions.
+        // The whole arc, nozzle to impact, gets populated with droplets every single pass, so it
+        // always reads as one solid, continuous stream rather than a single clump crawling down the
+        // arc. A small phase offset - tied to the player's tick count, so it continuously drifts
+        // rather than resetting - shifts exactly where along the arc each pass's sample points fall,
+        // which is what keeps the (otherwise static) full-length stream looking alive rather than
+        // like a frozen, teleported-in image.
         if (level.isClientSide()) {
             TrajectoryResult trajectory = traceTrajectory(level, player, eyePos, lookVec);
             double flightTime = Math.max(trajectory.flightTime(), 0.001);
+            double spacing = flightTime / TIME_SAMPLES_PER_PASS;
+            double phase = (player.tickCount / 20.0) % spacing;
 
-            double progress = STREAM_PROGRESS.merge(player.getUUID(), PASS_SECONDS, Double::sum);
-            if (progress > flightTime) {
-                progress %= flightTime;
-                STREAM_PROGRESS.put(player.getUUID(), progress);
-            }
-
-            for (int i = 0; i < DROPLET_TRAIL_LENGTH; i++) {
-                double t = progress - i * DROPLET_TRAIL_SPACING;
-                if (t < 0) break;
+            for (int i = 0; i < TIME_SAMPLES_PER_PASS; i++) {
+                double t = i * spacing + phase;
+                if (t > flightTime) continue;
 
                 Vec3 point = positionAtTime(eyePos, lookVec, t);
                 double spread = SPREAD_NEAR_NOZZLE + (t / flightTime) * (SPREAD_AT_TARGET - SPREAD_NEAR_NOZZLE);
-                point = jitterPerpendicular(point, lookVec, level, spread);
 
-                level.addParticle(ParticleTypes.FALLING_WATER, point.x, point.y, point.z, 0.0, 0.0, 0.0);
+                for (int d = 0; d < DROPLETS_PER_SAMPLE; d++) {
+                    Vec3 droplet = jitterPerpendicular(point, lookVec, level, spread);
+                    level.addParticle(ParticleTypes.FALLING_WATER, droplet.x, droplet.y, droplet.z, 0.0, 0.0, 0.0);
+                }
             }
 
             // A little burst right where the stream actually lands, so this piece of feedback stays
