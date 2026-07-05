@@ -1,7 +1,6 @@
 package com.axes.wildfireadditions.item;
 
 import dev.protomanly.pmweather.block.PMWFireBlock;
-import dev.protomanly.pmweather.data.DataAttachments;
 import net.minecraft.core.BlockPos;
 import net.minecraft.core.particles.ParticleTypes;
 import net.minecraft.server.level.ServerLevel;
@@ -18,7 +17,6 @@ import net.minecraft.world.level.ClipContext;
 import net.minecraft.world.level.Level;
 import net.minecraft.world.level.block.Blocks;
 import net.minecraft.world.level.block.state.BlockState;
-import net.minecraft.world.level.chunk.ChunkAccess;
 import net.minecraft.world.phys.BlockHitResult;
 import net.minecraft.world.phys.HitResult;
 import net.minecraft.world.phys.Vec3;
@@ -86,7 +84,13 @@ public class HoseItem extends Item {
         if (hitResult.getType() == HitResult.Type.BLOCK) {
             BlockPos center = hitResult.getBlockPos();
             boolean playedSound = false;
-            float totalCoolingApplied = 0.0f;
+
+            // This is personal firefighting equipment, not a wildfire suppression tool - it only
+            // ever cools the handful of PMWFireBlocks directly in the stream, and only once a
+            // second (INTENSITY runs 1-10), so fully dousing even a raging block takes several
+            // seconds of continuous, direct spray. It never touches the chunk-wide fire/moisture
+            // simulation, so it can't smother a wildfire on its own the way it used to.
+            boolean coolFireThisPass = player.tickCount % 20 == 0;
 
             // Iterate a 3x3x3 grid around the impact point
             for (int x = -1; x <= 1; x++) {
@@ -97,8 +101,10 @@ public class HoseItem extends Item {
 
                         // PMWeather specific fire logic
                         if (state.getBlock() instanceof PMWFireBlock) {
+                            if (!coolFireThisPass) continue;
+
                             int currentIntensity = state.getValue(PMWFireBlock.INTENSITY);
-                            int newIntensity = currentIntensity - 2;
+                            int newIntensity = currentIntensity - 1;
 
                             if (newIntensity <= 0) {
                                 level.removeBlock(checkPos, false);
@@ -112,13 +118,10 @@ public class HoseItem extends Item {
                                 level.playSound(null, checkPos, SoundEvents.FIRE_EXTINGUISH, SoundSource.BLOCKS, 0.6f, 1.0f + (level.random.nextFloat() * 0.2f));
                                 playedSound = true;
                             }
-
-                            totalCoolingApplied += 2.0f; // High cooling value for hitting actual fire
                         }
                         // Vanilla fire fallback
                         else if (state.is(Blocks.FIRE)) {
                             level.removeBlock(checkPos, false);
-                            totalCoolingApplied += 1.0f;
                         }
                         // Spraying normal blocks (Wetting them)
                         else if (!state.isAir()) {
@@ -126,30 +129,9 @@ public class HoseItem extends Item {
                             if (level.random.nextInt(10) == 0) {
                                 serverLevel.sendParticles(ParticleTypes.DRIPPING_WATER, checkPos.getX() + 0.5, checkPos.getY() + 1.0, checkPos.getZ() + 0.5, 2, 0.3, 0.1, 0.3, 0.0);
                             }
-                            totalCoolingApplied += 0.1f; // Minor ambient cooling for soaking terrain
                         }
                     }
                 }
-            }
-
-            // The Thermodynamic Chunk Hook
-            if (totalCoolingApplied > 0) {
-                ChunkAccess chunk = level.getChunk(center);
-
-                // Spike the chunk moisture (Max limit of 100)
-                float currentMoisture = chunk.getData(DataAttachments.MOISTURE);
-                float newMoisture = Math.min(100.0f, currentMoisture + (totalCoolingApplied * 2.5f));
-                chunk.setData(DataAttachments.MOISTURE, newMoisture);
-
-                // Tank the active fire intensity (Min limit of 0)
-                float currentFireIntensity = chunk.getData(DataAttachments.FIRE_INTENSITY);
-                float newFireIntensity = Math.max(0.0f, currentFireIntensity - totalCoolingApplied);
-                chunk.setData(DataAttachments.FIRE_INTENSITY, newFireIntensity);
-
-                // Tank the stable/ambient fire intensity
-                float currentStableFire = chunk.getData(DataAttachments.STABLE_FIRE_INTENSITY);
-                float newStableFire = Math.max(0.0f, currentStableFire - totalCoolingApplied);
-                chunk.setData(DataAttachments.STABLE_FIRE_INTENSITY, newStableFire);
             }
         }
     }
