@@ -80,12 +80,15 @@ public class HoseRenderHandler {
         // Flatten the corner-to-corner nodes plus the sagging subdivisions of the held segment into
         // a single continuous point path, so the tube below can share one cross-section ring at every
         // joint instead of building each segment as its own disconnected box.
-        List<Vec3> path = buildPath(renderNodes);
+        List<Vec3> path = buildPath(renderNodes, player.level());
 
         PoseStack poseStack = event.getPoseStack();
         Vec3 cameraPos = event.getCamera().getPosition();
 
-        VertexConsumer vertexConsumer = mc.renderBuffers().bufferSource().getBuffer(RenderType.entitySolid(HOSE_TEXTURE));
+        // entityCutoutNoCull renders both sides of every quad. The physics-driven corners are only
+        // ever validated as a straight raycast, so at any bend the ring frames can end up wound the
+        // "wrong" way relative to the camera; a culled render type made those faces vanish entirely.
+        VertexConsumer vertexConsumer = mc.renderBuffers().bufferSource().getBuffer(RenderType.entityCutoutNoCull(HOSE_TEXTURE));
         poseStack.pushPose();
         poseStack.translate(-cameraPos.x, -cameraPos.y, -cameraPos.z);
         Matrix4f matrix = poseStack.last().pose();
@@ -95,7 +98,7 @@ public class HoseRenderHandler {
         poseStack.popPose();
     }
 
-    private static List<Vec3> buildPath(List<Vec3> macroNodes) {
+    private static List<Vec3> buildPath(List<Vec3> macroNodes, Level level) {
         List<Vec3> path = new ArrayList<>();
         path.add(macroNodes.get(0));
 
@@ -117,10 +120,28 @@ public class HoseRenderHandler {
                 double x = Mth.lerp(t, start.x, end.x);
                 double y = Mth.lerp(t, start.y, end.y) + (4.0 * sag * t * (t - 1.0)); // Parabola
                 double z = Mth.lerp(t, start.z, end.z);
-                path.add(new Vec3(x, y, z));
+                // The sag is a purely visual droop that the server-side physics never validates
+                // against terrain, so on its own it can dip straight through a block sitting
+                // beneath the curve. Clamp it back up onto whatever surface is actually there.
+                path.add(clampAboveGround(level, new Vec3(x, y, z)));
             }
         }
         return path;
+    }
+
+    // Raises a point up onto the nearest solid surface directly beneath it, if the point would
+    // otherwise sit inside or below that surface. Never pushes a point down - a taut hose sagging
+    // over a gap is left alone.
+    private static Vec3 clampAboveGround(Level level, Vec3 point) {
+        BlockPos columnStart = BlockPos.containing(point.x, point.y + 2.0, point.z);
+        for (int i = 0; i < 8; i++) {
+            BlockPos check = columnStart.below(i);
+            if (!level.getBlockState(check).getCollisionShape(level, check).isEmpty()) {
+                double surfaceY = check.getY() + 1.0;
+                return point.y < surfaceY ? new Vec3(point.x, surfaceY, point.z) : point;
+            }
+        }
+        return point;
     }
 
     // Extrudes a single continuous tube along `path`. Cross-section rings are computed per vertex

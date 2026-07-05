@@ -1,6 +1,8 @@
 {
-	"parent": "minecraft:block/cube_all",
+	"parent": "minecraft:block/cube_bottom_top",
 	"textures": {
-		"all": "minecraft:block/iron_block"
+		"top": "wildfireadditions:block/pump_top",
+		"bottom": "wildfireadditions:block/pump_top",
+		"side": "wildfireadditions:block/pump_side"
 	}
 }
