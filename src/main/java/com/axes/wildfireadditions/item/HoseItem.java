@@ -129,7 +129,8 @@ public class HoseItem extends Item {
 
         if (trajectory.hitBlock() != null) {
             BlockPos center = trajectory.hitBlock();
-            boolean playedSound = false;
+            boolean playedHiss = false;
+            boolean playedDouseBurst = false;
 
             // This is personal firefighting equipment, not a wildfire suppression tool - it only
             // ever cools the handful of PMWFireBlocks directly in the stream, and only once a
@@ -147,27 +148,48 @@ public class HoseItem extends Item {
 
                         // PMWeather specific fire logic
                         if (state.getBlock() instanceof PMWFireBlock) {
-                            if (!coolFireThisPass) continue;
-
                             int currentIntensity = state.getValue(PMWFireBlock.INTENSITY);
-                            int newIntensity = currentIntensity - 3;
+                            double px = checkPos.getX() + 0.5, py = checkPos.getY() + 0.5, pz = checkPos.getZ() + 0.5;
 
-                            if (newIntensity <= 0) {
-                                level.removeBlock(checkPos, false);
-                            } else {
-                                level.setBlockAndUpdate(checkPos, state.setValue(PMWFireBlock.INTENSITY, newIntensity));
+                            // Continuous sizzle: every pass the stream is on the flames, water is
+                            // flashing to steam. Scaled by how fierce the fire still is, so a raging
+                            // block throws off a thick billowing plume while a dying one just wisps.
+                            int steamCount = 2 + currentIntensity / 2;
+                            serverLevel.sendParticles(ParticleTypes.CLOUD, px, py, pz, steamCount, 0.2, 0.15, 0.2, 0.03);
+                            serverLevel.sendParticles(ParticleTypes.LARGE_SMOKE, px, py, pz, 1, 0.15, 0.2, 0.15, 0.01);
+                            if (!playedHiss) {
+                                level.playSound(null, checkPos, SoundEvents.FIRE_EXTINGUISH, SoundSource.BLOCKS, 0.5f, 1.4f + (level.random.nextFloat() * 0.2f));
+                                playedHiss = true;
                             }
 
-                            // Visual & Audio feedback for extinguishing
-                            serverLevel.sendParticles(ParticleTypes.LARGE_SMOKE, checkPos.getX() + 0.5, checkPos.getY() + 0.5, checkPos.getZ() + 0.5, 3, 0.2, 0.2, 0.2, 0.0);
-                            if (!playedSound) {
-                                level.playSound(null, checkPos, SoundEvents.FIRE_EXTINGUISH, SoundSource.BLOCKS, 0.6f, 1.0f + (level.random.nextFloat() * 0.2f));
-                                playedSound = true;
+                            // Actual cooling only ticks once a second (see note above).
+                            if (!coolFireThisPass) continue;
+
+                            int newIntensity = currentIntensity - 3;
+                            if (newIntensity <= 0) {
+                                level.removeBlock(checkPos, false);
+
+                                // The payoff: as the flames finally die, a rising column of steam
+                                // erupts and a heavier, lower-pitched hiss cracks off.
+                                serverLevel.sendParticles(ParticleTypes.CLOUD, px, py, pz, 25, 0.3, 0.25, 0.3, 0.08);
+                                serverLevel.sendParticles(ParticleTypes.CAMPFIRE_COSY_SMOKE, px, py + 0.2, pz, 7, 0.2, 0.1, 0.2, 0.02);
+                                if (!playedDouseBurst) {
+                                    level.playSound(null, checkPos, SoundEvents.FIRE_EXTINGUISH, SoundSource.BLOCKS, 1.0f, 0.6f + (level.random.nextFloat() * 0.2f));
+                                    playedDouseBurst = true;
+                                }
+                            } else {
+                                level.setBlockAndUpdate(checkPos, state.setValue(PMWFireBlock.INTENSITY, newIntensity));
                             }
                         }
                         // Vanilla fire fallback
                         else if (state.is(Blocks.FIRE)) {
                             level.removeBlock(checkPos, false);
+                            double px = checkPos.getX() + 0.5, py = checkPos.getY() + 0.5, pz = checkPos.getZ() + 0.5;
+                            serverLevel.sendParticles(ParticleTypes.CLOUD, px, py, pz, 12, 0.25, 0.2, 0.25, 0.05);
+                            if (!playedDouseBurst) {
+                                level.playSound(null, checkPos, SoundEvents.FIRE_EXTINGUISH, SoundSource.BLOCKS, 1.0f, 0.6f + (level.random.nextFloat() * 0.2f));
+                                playedDouseBurst = true;
+                            }
                         }
                         // Spraying normal blocks (Wetting them)
                         else if (!state.isAir()) {
