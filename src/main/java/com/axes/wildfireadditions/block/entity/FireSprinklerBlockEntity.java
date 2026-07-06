@@ -79,7 +79,6 @@ public class FireSprinklerBlockEntity extends BlockEntity {
 
     // The head model reaches ~2 blocks tall, so expand the render box upward or the swivelling head can
     // be culled when the base block itself is just off the edge of the screen.
-    @Override
     public AABB getRenderBoundingBox() {
         return new AABB(worldPosition).expandTowards(0.0, 1.0, 0.0);
     }
