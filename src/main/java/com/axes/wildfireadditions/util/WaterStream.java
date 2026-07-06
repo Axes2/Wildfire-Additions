@@ -97,14 +97,56 @@ public final class WaterStream {
         return new TrajectoryResult(pos, null, MAX_STEPS * STEP_DT);
     }
 
-    // Client-side: hand-place FALLING_WATER particles directly along the real simulated arc. The whole
-    // arc, nozzle to impact, gets populated every single pass so it always reads as one solid stream; a
-    // small phase offset tied to `animTick` continuously drifts where each pass's sample points fall,
-    // keeping the (otherwise static) full-length stream looking alive rather than frozen. A little
-    // SPLASH burst is placed right where the stream lands so that feedback stays in sync with the cooling.
-    public static void spawnStreamParticles(Level level, Vec3 origin, Vec3 direction, double speed, double maxRange, long animTick) {
-        TrajectoryResult trajectory = traceTrajectory(level, null, origin, direction, speed, maxRange);
-        double flightTime = Math.max(trajectory.flightTime(), 0.001);
+    // How close (in blocks) the simulated arc must pass to a fire block for the turret to consider it
+    // reachable. Fire blocks have no collision, so an aimed stream sails straight through them; we detect
+    // a hit by proximity of the arc to the fire rather than by where the stream eventually lands.
+    public static final double TARGET_TOLERANCE = 1.25;
+
+    // The result of tracing an arc toward a specific target point: whether the arc passed within
+    // TARGET_TOLERANCE of it before hitting any solid block, where it got to, and the flight time there.
+    public record TargetTrace(boolean reached, Vec3 endPosition, double flightTime) {
+    }
+
+    // Traces the arc from `origin` down `direction` and reports whether it reaches `targetCenter` (passes
+    // within `tolerance`) before a solid block blocks it. This is how the turret does both line-of-sight
+    // ("can the water actually get to this fire, or is there a wall in the way?") and visual truncation -
+    // fire blocks don't collide, so a plain landing-point trace would sail through the fire and stop far
+    // beyond it, which is exactly the trap the old code fell into.
+    public static TargetTrace traceToTarget(Level level, Vec3 origin, Vec3 direction, double speed, double maxRange, Vec3 targetCenter, double tolerance) {
+        Vec3 pos = origin;
+        Vec3 velocity = direction.normalize().scale(speed);
+        double tolSq = tolerance * tolerance;
+
+        for (int step = 0; step < MAX_STEPS; step++) {
+            double elapsed = step * STEP_DT;
+
+            if (pos.distanceToSqr(targetCenter) <= tolSq) {
+                return new TargetTrace(true, pos, elapsed); // arc reached the fire
+            }
+
+            Vec3 nextPos = pos.add(velocity.scale(STEP_DT));
+            if (nextPos.distanceTo(origin) > maxRange) {
+                return new TargetTrace(false, pos, elapsed); // dissipated short of the fire
+            }
+
+            HitResult hit = level.clip(new ClipContext(pos, nextPos, ClipContext.Block.COLLIDER, ClipContext.Fluid.NONE, CollisionContext.empty()));
+            if (hit.getType() == HitResult.Type.BLOCK) {
+                return new TargetTrace(false, ((BlockHitResult) hit).getLocation(), elapsed + STEP_DT); // blocked by cover
+            }
+
+            pos = nextPos;
+            velocity = velocity.add(0, -GRAVITY * STEP_DT, 0);
+        }
+        return new TargetTrace(false, pos, MAX_STEPS * STEP_DT);
+    }
+
+    // Client-side: hand-place FALLING_WATER particles along the simulated arc, from the nozzle up to
+    // `flightTime` (the caller passes the time at which the arc reaches its impact/target, so the visible
+    // stream stops there instead of overshooting). The whole drawn span is populated every pass so it
+    // reads as one solid stream; a small `animTick`-driven phase offset keeps it looking alive. A SPLASH
+    // burst is placed at `impact` (the fire, or the surface the stream lands on) when non-null.
+    public static void spawnStreamParticles(Level level, Vec3 origin, Vec3 direction, double speed, double flightTime, @Nullable Vec3 impact, long animTick) {
+        flightTime = Math.max(flightTime, 0.001);
         double spacing = flightTime / TIME_SAMPLES_PER_PASS;
         double phase = (animTick / 20.0) % spacing;
 
@@ -121,9 +163,60 @@ public final class WaterStream {
             }
         }
 
-        if (trajectory.hitBlock() != null) {
-            Vec3 impact = trajectory.endPosition();
+        if (impact != null) {
             level.addParticle(ParticleTypes.SPLASH, impact.x, impact.y, impact.z, 0.0, 0.1, 0.0);
+        }
+    }
+
+    // Turret-specific stream: a much denser, higher-volume high-pressure jet than the handheld hose,
+    // with a thread of misty haze woven through it and a burst of spray at the nozzle so it reads as a
+    // pressurised monitor rather than a garden hose. Same arc as spawnStreamParticles, just far more
+    // particles plus the mist layer.
+    private static final int JET_SAMPLES = 24; // sample points along the arc (vs 14 for the hose)
+    private static final int JET_DROPLETS_PER_SAMPLE = 4; // water droplets per sample (vs 2)
+    private static final double JET_SPREAD_NEAR = 0.03; // tight and cohesive right at the nozzle
+    private static final double JET_SPREAD_FAR = 0.4; // fans out toward the target
+    private static final int JET_MIST_EVERY = 2; // every Nth sample also throws a wisp of mist
+
+    public static void spawnTurretStream(Level level, Vec3 origin, Vec3 direction, double speed, double flightTime, @Nullable Vec3 impact, long animTick) {
+        flightTime = Math.max(flightTime, 0.001);
+        double spacing = flightTime / JET_SAMPLES;
+        double phase = (animTick / 20.0) % spacing;
+        Vec3 dir = direction.normalize();
+
+        // Pressurised burst of mist blowing out of the nozzle.
+        for (int i = 0; i < 4; i++) {
+            Vec3 m = jitterPerpendicular(origin, direction, level.random, 0.12);
+            level.addParticle(ParticleTypes.CLOUD, m.x, m.y, m.z, dir.x * 0.25, dir.y * 0.25, dir.z * 0.25);
+        }
+
+        for (int i = 0; i < JET_SAMPLES; i++) {
+            double t = i * spacing + phase;
+            if (t > flightTime) continue;
+
+            Vec3 point = positionAtTime(origin, direction, speed, t);
+            double frac = t / flightTime;
+            double spread = JET_SPREAD_NEAR + frac * (JET_SPREAD_FAR - JET_SPREAD_NEAR);
+
+            for (int d = 0; d < JET_DROPLETS_PER_SAMPLE; d++) {
+                Vec3 droplet = jitterPerpendicular(point, direction, level.random, spread);
+                level.addParticle(ParticleTypes.FALLING_WATER, droplet.x, droplet.y, droplet.z, 0.0, 0.0, 0.0);
+            }
+
+            // A haze of mist threaded through the jet, drifting along with the stream.
+            if (i % JET_MIST_EVERY == 0) {
+                Vec3 mist = jitterPerpendicular(point, direction, level.random, spread * 1.5);
+                level.addParticle(ParticleTypes.CLOUD, mist.x, mist.y, mist.z, dir.x * 0.05, dir.y * 0.05, dir.z * 0.05);
+            }
+        }
+
+        // A heavier plume where the jet slams into the fire.
+        if (impact != null) {
+            for (int i = 0; i < 5; i++) {
+                level.addParticle(ParticleTypes.SPLASH, impact.x, impact.y, impact.z,
+                        (level.random.nextDouble() - 0.5) * 0.2, 0.15, (level.random.nextDouble() - 0.5) * 0.2);
+            }
+            level.addParticle(ParticleTypes.CLOUD, impact.x, impact.y + 0.1, impact.z, 0.0, 0.06, 0.0);
         }
     }
 

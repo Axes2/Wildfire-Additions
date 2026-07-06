@@ -6,6 +6,7 @@ import com.mojang.blaze3d.vertex.PoseStack;
 import com.mojang.blaze3d.vertex.VertexConsumer;
 import com.mojang.math.Axis;
 import net.minecraft.client.Minecraft;
+import net.minecraft.client.renderer.LevelRenderer;
 import net.minecraft.client.renderer.MultiBufferSource;
 import net.minecraft.client.renderer.RenderType;
 import net.minecraft.client.renderer.block.BlockRenderDispatcher;
@@ -29,6 +30,10 @@ public class FireSprinklerRenderer implements BlockEntityRenderer<FireSprinklerB
     public static final ModelResourceLocation HEAD_MODEL = ModelResourceLocation.standalone(
             ResourceLocation.fromNamespaceAndPath(WildfireAdditions.MODID, "block/fire_sprinkler_head"));
 
+    // The head is drawn with flat lighting (no ambient occlusion) so it reads a touch brighter/flatter
+    // than the chunk-baked base. Knock the colour down a bit so it blends in instead of standing out.
+    private static final float SHADE = 0.72f;
+
     private final BlockRenderDispatcher blockRenderer;
 
     public FireSprinklerRenderer(BlockEntityRendererProvider.Context context) {
@@ -41,6 +46,13 @@ public class FireSprinklerRenderer implements BlockEntityRenderer<FireSprinklerB
         BlockState state = be.getBlockState();
         float yaw = Mth.rotLerp(partialTick, be.prevRenderYaw, be.renderYaw);
 
+        // The sprinkler block is a full opaque cube, so the light sampled inside its own cell (what the
+        // dispatcher passes as packedLight) is 0 - which rendered the head pitch black. The head sits
+        // above the base, so sample the (lit) block above it instead.
+        int headLight = be.getLevel() != null
+                ? LevelRenderer.getLightColor(be.getLevel(), be.getBlockPos().above())
+                : packedLight;
+
         poseStack.pushPose();
         // Rotate the head about the block's central vertical axis (0.5, y, 0.5).
         poseStack.translate(0.5, 0.0, 0.5);
@@ -50,7 +62,7 @@ public class FireSprinklerRenderer implements BlockEntityRenderer<FireSprinklerB
         VertexConsumer consumer = buffer.getBuffer(RenderType.cutout());
         blockRenderer.getModelRenderer().renderModel(
                 poseStack.last(), consumer, state, model,
-                1.0f, 1.0f, 1.0f, packedLight, packedOverlay, ModelData.EMPTY, RenderType.cutout());
+                SHADE, SHADE, SHADE, headLight, packedOverlay, ModelData.EMPTY, RenderType.cutout());
 
         poseStack.popPose();
     }
