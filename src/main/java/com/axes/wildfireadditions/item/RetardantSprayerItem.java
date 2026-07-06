@@ -113,12 +113,21 @@ public class RetardantSprayerItem extends Item {
                     case X -> center.offset(0, a, b);
                 };
                 BlockState state = level.getBlockState(pos);
-                // Skip empty air, blocks already coated, and non-solid undergrowth (see isCoatable).
-                if (!isCoatable(level, pos, state)) continue;
-                if (RetardantCoating.isCoated(level, pos)) continue;
+                if (isCoatable(level, pos, state) && !RetardantCoating.isCoated(level, pos)) {
+                    RetardantCoating.coat(serverLevel, pos);
+                    coatedCount++;
+                }
 
-                RetardantCoating.coat(serverLevel, pos);
-                coatedCount++;
+                // Also coat whatever sits directly in front of this face: the spray ray (COLLIDER)
+                // passes straight through non-solid plants, so tall grass, ferns and flowers standing
+                // ON the sprayed floor - or torches/vines mounted on the sprayed wall - live one block
+                // toward the player from the patch plane and would otherwise never receive a note.
+                BlockPos front = pos.relative(face);
+                BlockState frontState = level.getBlockState(front);
+                if (isCoatable(level, front, frontState) && !RetardantCoating.isCoated(level, front)) {
+                    RetardantCoating.coat(serverLevel, front);
+                    coatedCount++;
+                }
             }
         }
 
