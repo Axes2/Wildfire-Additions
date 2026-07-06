@@ -59,7 +59,7 @@ public final class RetardantRenderHandler {
         BlockPos.MutableBlockPos cursor = new BlockPos.MutableBlockPos();
         ClientCoatingStore.forEachCoating(now, packedPos -> {
             if (budget[0] <= 0) return;
-            cursor.set(packedPos);
+            cursor.set(BlockPos.getX(packedPos), BlockPos.getY(packedPos), BlockPos.getZ(packedPos));
 
             double dx = cursor.getX() + 0.5 - cam.x;
             double dy = cursor.getY() + 0.5 - cam.y;

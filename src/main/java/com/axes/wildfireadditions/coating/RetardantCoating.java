@@ -50,8 +50,19 @@ public final class RetardantCoating {
         CoatingSync.sendAdd(level, pos.asLong(), expiry);
     }
 
-    /** Whether {@code pos} currently carries an active, unexpired coating. Never forces a chunk to load. */
+    /**
+     * Whether {@code pos} currently carries an active, unexpired coating. Never forces a chunk to load.
+     *
+     * <p>This is on the hot path of PMWeather's fire simulation (via {@code PMWFireBlockMixin}), so it
+     * early-outs cheaply: on the server it first checks the per-dimension active-chunk set - if this
+     * block's chunk holds no notes at all, it returns immediately without ever touching chunk data.
+     */
     public static boolean isCoated(Level level, BlockPos pos) {
+        if (level instanceof ServerLevel server) {
+            LongSet active = ACTIVE_CHUNKS.get(server.dimension());
+            if (active == null || active.isEmpty()) return false;
+            if (!active.contains(ChunkPos.asLong(pos.getX() >> 4, pos.getZ() >> 4))) return false;
+        }
         ChunkAccess chunk = level.getChunk(pos.getX() >> 4, pos.getZ() >> 4, ChunkStatus.FULL, false);
         if (chunk == null || !chunk.hasData(ModAttachments.COATING.get())) return false;
         return chunk.getData(ModAttachments.COATING.get()).isCoated(pos.asLong(), level.getGameTime());

@@ -50,8 +50,10 @@ Example mod description.
 '''
 
 # The [[mixins]] block allows you to declare your mixin config to FML so that it gets loaded.
-#[[mixins]]
-#config="${mod_id}.mixins.json"
+# Loads the mixin that hooks PMWeather's PMWFireBlock.canBurnOn so retardant-coated blocks resist
+# fire spread below a high intensity threshold (see PMWFireBlockMixin).
+[[mixins]]
+config="${mod_id}.mixins.json"
 
 # The [[accessTransformers]] block allows you to declare where your AT file is.
 # If this block is omitted, a fallback attempt will be made to load an AT from META-INF/accesstransformer.cfg
@@ -86,6 +88,16 @@ Example mod description.
     # This version range declares a minimum of the current minecraft version up to but not including the next major version
     versionRange="${minecraft_version_range}"
     ordering="NONE"
+    side="BOTH"
+
+# PMWeather (ProtoManly's Weather) - this mod's tools integrate directly with its fire simulation
+# (PMWFireBlock, ModBlocks.FIRE, chunk fire-intensity data) and mix in to its canBurnOn gatekeeper, so
+# it must be present and loaded first.
+[[dependencies.${mod_id}]]
+    modId="pmweather"
+    type="required"
+    versionRange="[0,)"
+    ordering="AFTER"
     side="BOTH"
 
 # Features are specific properties of the game environment, that you may want to declare you require. This example declares
