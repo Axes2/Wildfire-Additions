@@ -5,8 +5,10 @@ import dev.protomanly.pmweather.block.ModBlocks;
 import dev.protomanly.pmweather.block.PMWFireBlock;
 import dev.protomanly.pmweather.data.DataAttachments;
 import net.minecraft.core.BlockPos;
+import net.minecraft.core.particles.ParticleTypes;
 import net.minecraft.resources.ResourceKey;
 import net.minecraft.server.level.ServerLevel;
+import net.minecraft.tags.BlockTags;
 import net.minecraft.world.level.ChunkPos;
 import net.minecraft.world.level.Level;
 import net.minecraft.world.level.block.state.BlockState;
@@ -82,6 +84,11 @@ public class DripTorchFireHandler {
     // fire before we ever get a chance to clamp it back down. CAP=1 is the only value where that's
     // guaranteed rather than merely likely.
     private static final int CAP = 1;
+    // NB: a low cap does NOT make the tool weak. The two things a bigger intensity would buy -
+    // visible flames and clearing undergrowth - are delivered independently of it: our own flame
+    // particles (see emitEmberParticles) and burning straight through vegetation (see plantEmber).
+    // Raising the block's actual intensity to 2+ would re-enable the same-tick wind-biased native
+    // spread this whole class exists to prevent, so it stays at 1 and we add the punch elsewhere.
 
     // Raised substantially: a wide, slow-advancing backfire that's actually starving a fire line of
     // fuel needs far more simultaneously-tracked embers than a thin trail ever did. Affordable because
@@ -117,6 +124,9 @@ public class DripTorchFireHandler {
 
     private static final int MAX_STEP_HEIGHT = 3; // Don't let the fire creep up/down cliffs.
 
+    private static final int PARTICLE_PERIOD = 3; // Ticks between cosmetic flame bursts.
+    private static final float PARTICLE_CHANCE = 0.02f; // Per-ember chance each burst - keeps totals bounded.
+
     private static final Map<ResourceKey<Level>, Set<BlockPos>> EMBERS = new HashMap<>();
 
     /**
@@ -130,7 +140,20 @@ public class DripTorchFireHandler {
         Set<BlockPos> set = EMBERS.computeIfAbsent(level.dimension(), k -> new LinkedHashSet<>());
         if (set.size() >= MAX_EMBERS) return false;
 
-        if (!level.getBlockState(pos).isAir()) return false;
+        // Never overwrite existing fire - that includes our own embers, but critically also the
+        // wildfire itself, which we must never override. (Fire may be in the REPLACEABLE tag below, so
+        // this explicit guard is what actually protects the wildfire's blocks.)
+        BlockState here = level.getBlockState(pos);
+        if (here.getBlock() instanceof PMWFireBlock) return false;
+
+        // Otherwise the fire may occupy air OR burn straight through low undergrowth (tall grass,
+        // ferns, dead bush, flowers) - the plant is simply overwritten by the fire block, which is
+        // exactly how the line clears vegetation from its path. Previously this required plain air, so
+        // the fire refused to place wherever undergrowth stood and left it uncleared. It must never be
+        // placed into a fluid, though.
+        boolean canReplace = here.isAir() || here.is(BlockTags.REPLACEABLE) || here.is(BlockTags.FLOWERS);
+        if (!canReplace || !here.getFluidState().isEmpty()) return false;
+
         BlockState ground = level.getBlockState(pos.below());
         // Only ever light on soil-type ground - never leaves, logs, or structures.
         if (!PMWFireBlock.isGroundSuitable(level, ground, pos.below())) return false;
@@ -151,6 +174,9 @@ public class DripTorchFireHandler {
         long time = level.getGameTime();
         if (time % CLAMP_PERIOD == 0) {
             clampIntensity(level, set);
+        }
+        if (time % PARTICLE_PERIOD == 0) {
+            emitEmberParticles(level, set);
         }
         if (time % CREEP_PERIOD == 0) {
             creepTowardFire(level, set);
@@ -177,6 +203,23 @@ public class DripTorchFireHandler {
         }
 
         set.removeAll(toRemove);
+    }
+
+    // Cosmetic only. The fire block is capped at a low intensity for safety (see class doc), so
+    // PMWeather's own animate never gives it the big flames it reserves for intensity 3+. We add our
+    // own modest flame/ember particles so the backburn still reads as a real, lively fire. Bounded by a
+    // low per-ember chance, so even a full 4000-ember set only puts out a few dozen particles per burst;
+    // sendParticles itself only forwards them to players close enough to see, so distant embers cost
+    // just the RNG roll.
+    private static void emitEmberParticles(ServerLevel level, Set<BlockPos> set) {
+        for (BlockPos pos : set) {
+            if (level.random.nextFloat() >= PARTICLE_CHANCE) continue;
+            double x = pos.getX() + 0.5, y = pos.getY() + 0.15, z = pos.getZ() + 0.5;
+            level.sendParticles(ParticleTypes.FLAME, x, y, z, 2, 0.22, 0.08, 0.22, 0.01);
+            if (level.random.nextInt(3) == 0) {
+                level.sendParticles(ParticleTypes.SMOKE, x, y + 0.35, z, 1, 0.12, 0.1, 0.12, 0.01);
+            }
+        }
     }
 
     // Advances the burning front toward the wildfire, one block at a time (~1 block/second overall,
