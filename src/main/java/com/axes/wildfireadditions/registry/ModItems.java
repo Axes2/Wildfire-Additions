@@ -3,6 +3,7 @@ package com.axes.wildfireadditions.registry;
 import com.axes.wildfireadditions.WildfireAdditions;
 import com.axes.wildfireadditions.item.DripTorchItem;
 import com.axes.wildfireadditions.item.HoseItem;
+import com.axes.wildfireadditions.item.RetardantSprayerItem;
 import net.minecraft.world.item.BlockItem;
 import net.minecraft.world.item.Item;
 import net.neoforged.neoforge.registries.DeferredRegister;
@@ -19,4 +20,7 @@ public class ModItems {
 
     public static final DeferredItem<Item> DRIP_TORCH = ITEMS.register("drip_torch",
             () -> new DripTorchItem(new Item.Properties().stacksTo(1)));
+
+    public static final DeferredItem<Item> RETARDANT_SPRAYER = ITEMS.register("retardant_sprayer",
+            () -> new RetardantSprayerItem(new Item.Properties().durability(RetardantSprayerItem.DURABILITY)));
 }

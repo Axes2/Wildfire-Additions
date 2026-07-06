@@ -1,0 +1,30 @@
+{
+	"type": "minecraft:crafting_shaped",
+	"category": "equipment",
+	"pattern": [
+		"CGC",
+		"DMD",
+		"HCH"
+	],
+	"key": {
+		"C": {
+			"item": "minecraft:copper_ingot"
+		},
+		"G": {
+			"item": "minecraft:glass"
+		},
+		"D": {
+			"item": "minecraft:red_dye"
+		},
+		"M": {
+			"item": "minecraft:magma_cream"
+		},
+		"H": {
+			"item": "minecraft:honeycomb"
+		}
+	},
+	"result": {
+		"id": "wildfireadditions:retardant_sprayer",
+		"count": 1
+	}
+}
