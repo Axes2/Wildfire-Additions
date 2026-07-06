@@ -64,6 +64,16 @@ import java.util.List;
  * no overlapping translucency (no seams). Rendering reads {@link ClientCoatingStore}, so the tint self-
  * expires as notes lapse. Blocks that render via a block entity ({@link RenderShape#ENTITYBLOCK_ANIMATED}
  * - chests, signs, beds) have no baked block model and are skipped.
+ *
+ * <h2>Hiding the repeat</h2>
+ * {@link #OVERLAY_TEXTURE} tiles seamlessly (built from toroidal noise, so its own edges already match
+ * up), but every block still samples the exact same image - seamless tiling alone only removes the hard
+ * border line, it doesn't stop the same blotch shape from visibly repeating across a large sprayed area.
+ * We break that up the same way vanilla hides its own repeating textures (mycelium, cracked stone
+ * bricks, dirt paths): {@link #orientationFor} derives a small per-block rotation/mirror from a hash of
+ * the block's position, and {@link #applyOrientation} applies it to each quad's UV. Neighbouring blocks
+ * therefore usually show the same source pattern in a different orientation, so the eye can't lock onto
+ * one repeating unit even though there's only one underlying texture.
  */
 @EventBusSubscriber(modid = WildfireAdditions.MODID, value = Dist.CLIENT)
 public final class RetardantRenderHandler {
@@ -118,8 +128,9 @@ public final class RetardantRenderHandler {
 
             BakedModel model = dispatcher.getBlockModel(state);
             ModelData modelData = model.getModelData(level, cursor, state, ModelData.EMPTY);
+            int orientation = orientationFor(packedPos);
 
-            renderStain(pose, consumer, level, state, model, modelData, cursor.immutable(), cam, random);
+            renderStain(pose, consumer, level, state, model, modelData, cursor.immutable(), cam, random, orientation);
             budget[0]--;
         });
 
@@ -128,7 +139,7 @@ public final class RetardantRenderHandler {
 
     private static void renderStain(PoseStack pose, VertexConsumer consumer, ClientLevel level, BlockState state,
                                     BakedModel model, ModelData modelData, BlockPos pos, Vec3 cam,
-                                    RandomSource random) {
+                                    RandomSource random, int orientation) {
         // Direction from the block centre toward the camera, so the overlay can be lifted a hair in
         // front of the real block (beats z-fighting) as a rigid shift - not a scale, so it can't cause
         // neighbouring blocks' overlays to overlap into seams.
@@ -160,18 +171,44 @@ public final class RetardantRenderHandler {
             random.setSeed(state.getSeed(pos)); // Vanilla reseeds per face so model variants stay stable.
             List<BakedQuad> quads = model.getQuads(state, dir, random, modelData, null);
             for (BakedQuad quad : quads) {
-                emitQuadStained(consumer, last, quad, light);
+                emitQuadStained(consumer, last, quad, light, orientation);
             }
         }
 
         pose.popPose();
     }
 
+    // Derives a small per-block orientation (0-7: 4 rotations x mirrored/not) from a hash of the block's
+    // position, so neighbouring coated blocks usually sample OVERLAY_TEXTURE in different orientations
+    // instead of all showing the identical, obviously-repeating blotch (see "Hiding the repeat" above).
+    // A simple multiplicative (Fibonacci) hash is plenty here - this only needs to look varied, not be
+    // cryptographically unpredictable - and is fully deterministic so the tint doesn't flicker per frame.
+    private static int orientationFor(long packedPos) {
+        long h = packedPos * 0x9E3779B97F4A7C15L;
+        return (int) (h >>> 58) & 7;
+    }
+
+    // Applies orientationFor's result to a local (0..1) UV coordinate: bit 2 selects a mirror, bits 0-1
+    // select a 90-degree rotation of the unit square.
+    private static float[] applyOrientation(float u, float v, int orientation) {
+        if ((orientation & 4) != 0) {
+            u = 1.0f - u;
+        }
+        return switch (orientation & 3) {
+            case 1 -> new float[]{v, 1.0f - u};
+            case 2 -> new float[]{1.0f - u, 1.0f - v};
+            case 3 -> new float[]{1.0f - v, u};
+            default -> new float[]{u, v};
+        };
+    }
+
     // Re-emits one quad's four corners against our own stain texture: positions come straight from the
     // quad, but UV is the quad's own baked (atlas-space) UV linearly remapped to local 0..1 space (see
-    // class doc) so it samples OVERLAY_TEXTURE correctly instead of wherever it originally pointed in
-    // the block atlas. Colour is left white so only the stain texture's own RGBA shows through.
-    private static void emitQuadStained(VertexConsumer consumer, PoseStack.Pose pose, BakedQuad quad, int light) {
+    // class doc), then rotated/mirrored per-block (see orientationFor), so it samples OVERLAY_TEXTURE
+    // correctly instead of wherever it originally pointed in the block atlas. Colour is left white so
+    // only the stain texture's own RGBA shows through.
+    private static void emitQuadStained(VertexConsumer consumer, PoseStack.Pose pose, BakedQuad quad, int light,
+                                        int orientation) {
         int[] verts = quad.getVertices();
         int stride = verts.length / 4; // ints per vertex: position(3) + color(1) + uv(2) + ...
 
@@ -213,9 +250,10 @@ public final class RetardantRenderHandler {
         for (int i = 0; i < 4; i++) {
             float localU = (u[i] - uMin) / uSpan;
             float localV = (v[i] - vMin) / vSpan;
+            float[] oriented = applyOrientation(localU, localV, orientation);
             consumer.addVertex(pose, px[i], py[i], pz[i])
                     .setColor(1.0f, 1.0f, 1.0f, 1.0f)
-                    .setUv(localU, localV)
+                    .setUv(oriented[0], oriented[1])
                     .setOverlay(OverlayTexture.NO_OVERLAY)
                     .setLight(light)
                     .setNormal(pose, nx, ny, nz);
