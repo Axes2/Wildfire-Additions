@@ -1,6 +1,7 @@
 package com.axes.wildfireadditions.registry;
 
 import com.axes.wildfireadditions.WildfireAdditions;
+import com.axes.wildfireadditions.block.FireSprinklerBlock;
 import com.axes.wildfireadditions.block.PumpBoxBlock;
 import net.minecraft.world.level.block.Block;
 import net.minecraft.world.level.block.state.BlockBehaviour;
@@ -13,4 +14,7 @@ public class ModBlocks {
 
     public static final DeferredBlock<Block> PUMP_BOX = BLOCKS.register("pump_box",
             () -> new PumpBoxBlock(BlockBehaviour.Properties.of().mapColor(MapColor.METAL).strength(3.0f).requiresCorrectToolForDrops()));
+
+    public static final DeferredBlock<Block> FIRE_SPRINKLER = BLOCKS.register("fire_sprinkler",
+            () -> new FireSprinklerBlock(BlockBehaviour.Properties.of().mapColor(MapColor.METAL).strength(3.0f).requiresCorrectToolForDrops()));
 }

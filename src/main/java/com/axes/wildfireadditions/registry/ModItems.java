@@ -14,6 +14,9 @@ public class ModItems {
     public static final DeferredItem<Item> PUMP_BOX_ITEM = ITEMS.register("pump_box",
             () -> new BlockItem(ModBlocks.PUMP_BOX.get(), new Item.Properties()));
 
+    public static final DeferredItem<Item> FIRE_SPRINKLER_ITEM = ITEMS.register("fire_sprinkler",
+            () -> new BlockItem(ModBlocks.FIRE_SPRINKLER.get(), new Item.Properties()));
+
     public static final DeferredItem<Item> HOSE = ITEMS.register("hose",
             () -> new HoseItem(new Item.Properties().stacksTo(1)));
 
