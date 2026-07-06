@@ -17,6 +17,7 @@ import net.neoforged.fml.common.EventBusSubscriber;
 import net.neoforged.neoforge.event.tick.LevelTickEvent;
 
 import java.util.ArrayList;
+import java.util.Collections;
 import java.util.HashMap;
 import java.util.LinkedHashSet;
 import java.util.List;
@@ -55,6 +56,14 @@ import java.util.Set;
  *       wildfire we simply stop tracking it - no override, no reset. From that moment it's an
  *       ordinary wildfire block that grows and behaves like any other.</li>
  * </ul>
+ *
+ * <p>The tracked set needs to be large: a slow, wide backfire that's actually starving the wildfire of
+ * fuel (rather than a thin single-file trail) can easily need thousands of embers alive at once. Two
+ * things keep that affordable: the expensive per-ember check (a 26-neighbour scan, for merge detection)
+ * runs far less often than the cheap one (a single block-state read, for the intensity clamp - see
+ * {@link #clampIntensity}); and each creep pass only lets a bounded, <i>randomly shuffled</i> subset of
+ * embers attempt to advance, so the front stays roughly even instead of a few lucky embers (always the
+ * same ones, in a fixed iteration order) racing ahead while the rest of the line never gets a turn.
  */
 @EventBusSubscriber(modid = WildfireAdditions.MODID)
 public class DripTorchFireHandler {
@@ -65,26 +74,43 @@ public class DripTorchFireHandler {
     // fire before we ever get a chance to clamp it back down. CAP=1 is the only value where that's
     // guaranteed rather than merely likely.
     private static final int CAP = 1;
-    private static final int MAX_EMBERS = 220; // Per-level safety bound against runaway tracking.
 
-    // Cheap defense-in-depth: re-clamp every tick in case of any other growth path we haven't
-    // accounted for. The actual wind-spread guarantee above doesn't depend on this running often -
-    // it holds even if this handler never ran at all.
-    private static final int CLAMP_PERIOD = 1; // Ticks between clamp/prune/merge passes.
-    private static final int CREEP_PERIOD = 10; // Ticks between directed-spread passes.
-    private static final int CREEP_BUDGET = 16; // Max embers that attempt to creep per pass.
+    // Raised substantially: a wide, slow-advancing backfire that's actually starving a fire line of
+    // fuel needs far more simultaneously-tracked embers than a thin trail ever did. Kept affordable by
+    // splitting the per-ember work (see CLAMP_PERIOD/MERGE_CHECK_PERIOD below) rather than by keeping
+    // this small.
+    private static final int MAX_EMBERS = 4000;
+
+    // The intensity clamp is one block-state read (plus a write only when it fires) per tracked ember,
+    // and per the class doc it MUST run essentially every tick to keep the wind-spread guarantee
+    // airtight - unlike everything else here, its safety doesn't come from running often, it comes
+    // from the cap value itself, but it still has to run before each ember's own next random tick.
+    private static final int CLAMP_PERIOD = 1; // Ticks between intensity-clamp passes.
+
+    // Detecting "has this ember touched the wildfire" is a 26-neighbour scan - much pricier per ember
+    // than the clamp - but a few ticks of lag before releasing an ember is completely harmless, so it
+    // runs far less often. This is what makes the much larger MAX_EMBERS affordable.
+    private static final int MERGE_CHECK_PERIOD = 5;
+
+    // ~1 block/second: one step every CREEP_PERIOD ticks (20 ticks = 1 second).
+    private static final int CREEP_PERIOD = 20;
+    private static final int CREEP_STEP = 1;
+
+    // Max embers that attempt to creep per pass. The frontier is shuffled first (see creepTowardFire)
+    // so this bound doesn't silently turn into "only the first N in iteration order ever advance" -
+    // over several passes, every ember gets a fair shot, keeping the whole line advancing together
+    // instead of a few racing ahead while the rest of the coverage never fills in.
+    private static final int CREEP_BUDGET = 128;
 
     // Fine tier: precise steering once a real fire block is within reach. Kept small - it's a
     // per-block scan - since its only job now is short-range precision, not long-range sensing.
     private static final int FINE_SCAN_RADIUS = 10; // Horizontal reach, in blocks.
     private static final int FINE_SCAN_VERTICAL = 4; // Vertical reach, in blocks (fire on slopes).
-    private static final int FINE_CREEP_STEP = 2; // Blocks advanced per creep at this tier.
 
     // Coarse tier: long-range sensing via per-chunk data instead of per-block, so a wildfire that's
     // realistically far away (100+ blocks) can still be detected and headed towards affordably.
     private static final int LONG_RANGE_CHUNK_RADIUS = 7; // ~112 blocks; chunks, not blocks.
     private static final float CHUNK_FIRE_THRESHOLD = 0.75f; // Min STABLE_FIRE_INTENSITY to bother creeping.
-    private static final int LONG_RANGE_CREEP_STEP = 6; // Bigger leaps while just heading in-general.
 
     private static final int MAX_STEP_HEIGHT = 3; // Don't let the fire creep up/down cliffs.
 
@@ -121,27 +147,26 @@ public class DripTorchFireHandler {
 
         long time = level.getGameTime();
         if (time % CLAMP_PERIOD == 0) {
-            clampAndMerge(level, set);
+            clampIntensity(level, set);
+        }
+        if (time % MERGE_CHECK_PERIOD == 0) {
+            checkMerges(level, set);
         }
         if (time % CREEP_PERIOD == 0) {
             creepTowardFire(level, set);
         }
     }
 
-    // Keeps tracked embers at or below the cap, drops any that have burned out, and releases any that
-    // have reached the real wildfire (so they merge in and behave normally from then on).
-    private static void clampAndMerge(ServerLevel level, Set<BlockPos> set) {
+    // Keeps tracked embers at or below the cap, and drops any that have burned out. One block-state
+    // read per ember (plus a write only when a clamp actually fires) - cheap enough to run every tick,
+    // which per the class doc is what keeps the wind-spread guarantee airtight.
+    private static void clampIntensity(ServerLevel level, Set<BlockPos> set) {
         List<BlockPos> toRemove = new ArrayList<>();
 
         for (BlockPos pos : set) {
             BlockState state = level.getBlockState(pos);
             if (!(state.getBlock() instanceof PMWFireBlock)) {
                 toRemove.add(pos); // Burned out or consumed - nothing left to manage.
-                continue;
-            }
-
-            if (isAdjacentToWildfire(level, set, pos)) {
-                toRemove.add(pos); // Reached the wildfire: stop managing, let it merge seamlessly.
                 continue;
             }
 
@@ -154,13 +179,31 @@ public class DripTorchFireHandler {
         set.removeAll(toRemove);
     }
 
-    // Advances the burning front toward the wildfire, one modest step at a time. Tries precise
-    // (fine, block-level) targeting first; if nothing's close enough for that, falls back to coarse
-    // (chunk-level) sensing so a wildfire well over 100 blocks away can still pull the fire toward it.
+    // Releases any tracked ember that has reached the real wildfire (so it merges in and behaves
+    // normally from then on). A 26-neighbour scan per ember - much pricier than the intensity clamp -
+    // but a few ticks of lag before releasing one is harmless, so this runs on a slower cadence.
+    private static void checkMerges(ServerLevel level, Set<BlockPos> set) {
+        List<BlockPos> toRemove = new ArrayList<>();
+
+        for (BlockPos pos : set) {
+            if (isAdjacentToWildfire(level, set, pos)) {
+                toRemove.add(pos); // Reached the wildfire: stop managing, let it merge seamlessly.
+            }
+        }
+
+        set.removeAll(toRemove);
+    }
+
+    // Advances the burning front toward the wildfire, one block at a time (~1 block/second overall,
+    // via CREEP_PERIOD). Tries precise (fine, block-level) targeting first; if nothing's close enough
+    // for that, falls back to coarse (chunk-level) sensing so a wildfire well over 100 blocks away can
+    // still pull the fire toward it. The frontier is shuffled before the budget is applied so a large
+    // tracked set advances as one even front rather than a few embers monopolising every pass.
     private static void creepTowardFire(ServerLevel level, Set<BlockPos> set) {
         if (set.size() >= MAX_EMBERS) return;
 
         List<BlockPos> frontier = new ArrayList<>(set);
+        Collections.shuffle(frontier);
         int attempts = 0;
 
         for (BlockPos ember : frontier) {
@@ -169,7 +212,7 @@ public class DripTorchFireHandler {
             BlockPos fineTarget = findNearestWildfire(level, set, ember);
             if (fineTarget != null) {
                 attempts++;
-                stepToward(level, ember, fineTarget.getX(), fineTarget.getZ(), FINE_CREEP_STEP);
+                stepToward(level, ember, fineTarget.getX(), fineTarget.getZ(), CREEP_STEP);
                 continue;
             }
 
@@ -179,7 +222,7 @@ public class DripTorchFireHandler {
 
             int targetX = hotChunk.x * 16 + 8;
             int targetZ = hotChunk.z * 16 + 8;
-            stepToward(level, ember, targetX, targetZ, LONG_RANGE_CREEP_STEP);
+            stepToward(level, ember, targetX, targetZ, CREEP_STEP);
         }
     }
 
