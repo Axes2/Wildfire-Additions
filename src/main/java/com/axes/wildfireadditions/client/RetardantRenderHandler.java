@@ -3,38 +3,64 @@ package com.axes.wildfireadditions.client;
 import com.axes.wildfireadditions.WildfireAdditions;
 import com.axes.wildfireadditions.coating.ClientCoatingStore;
 import com.mojang.blaze3d.vertex.PoseStack;
+import com.mojang.blaze3d.vertex.VertexConsumer;
 import net.minecraft.client.Minecraft;
 import net.minecraft.client.multiplayer.ClientLevel;
+import net.minecraft.client.renderer.LevelRenderer;
 import net.minecraft.client.renderer.MultiBufferSource;
-import net.minecraft.client.renderer.debug.DebugRenderer;
+import net.minecraft.client.renderer.RenderType;
+import net.minecraft.client.renderer.block.BlockRenderDispatcher;
+import net.minecraft.client.renderer.block.model.BakedQuad;
+import net.minecraft.client.renderer.texture.OverlayTexture;
+import net.minecraft.client.resources.model.BakedModel;
 import net.minecraft.core.BlockPos;
+import net.minecraft.core.Direction;
+import net.minecraft.util.RandomSource;
+import net.minecraft.world.level.block.RenderShape;
 import net.minecraft.world.level.block.state.BlockState;
-import net.minecraft.world.phys.AABB;
 import net.minecraft.world.phys.Vec3;
-import net.minecraft.world.phys.shapes.VoxelShape;
 import net.neoforged.api.distmarker.Dist;
 import net.neoforged.bus.api.SubscribeEvent;
 import net.neoforged.fml.common.EventBusSubscriber;
 import net.neoforged.neoforge.client.event.ClientPlayerNetworkEvent;
 import net.neoforged.neoforge.client.event.RenderLevelStageEvent;
+import net.neoforged.neoforge.client.model.data.ModelData;
+
+import java.util.List;
 
 /**
- * Paints the retardant tint. After the world's solid, fluid and translucent geometry is drawn, we step
- * in and, for every coated block the client knows about ({@link ClientCoatingStore}), fetch that
- * block's actual collision shape, inflate it a hair to avoid z-fighting with the block face, and draw a
- * semi-transparent red box over it. Because we read the real shape per block, stairs, slabs, fences and
- * full blocks all get a snugly fitted tint with no bespoke textures.
+ * Paints the retardant tint by <b>re-rendering each coated block's real baked model</b> in translucent
+ * red, rather than drawing a box around it. After the world's own geometry is drawn, for every coated
+ * block we ask {@link BlockRenderDispatcher} for its {@link BakedModel}, then push that model's quads
+ * again through a translucent buffer with a red colour injected. Because we render the actual model:
  *
- * <p>Rendering off the shared {@link ClientCoatingStore} means the tint self-expires: {@code forEachCoating}
- * skips (and prunes) notes whose timestamp has passed, measured against the synced game time.
+ * <ul>
+ *   <li>Grass, ferns and flowers tint onto their exact cross-planes (the transparent parts of the
+ *       texture stay transparent, so only the blades/petals go red).</li>
+ *   <li>Torches, fences, stairs and slabs hug their real geometry.</li>
+ *   <li>Complex modded models with no collision still get a pixel-perfect wrap.</li>
+ * </ul>
+ *
+ * <p>Two details make it look right: the model is scaled up by a hair ({@link #INFLATE}) around its
+ * centre so it doesn't z-fight the real block, and the quads are pushed with an explicit alpha (which
+ * {@code ModelBlockRenderer} can't do on its own - it writes opaque) so the overlay is genuinely
+ * translucent. Rendering off {@link ClientCoatingStore} means the tint self-expires as notes lapse.
+ *
+ * <p>Blocks that render via a block entity ({@link RenderShape#ENTITYBLOCK_ANIMATED} - chests, signs,
+ * beds) have no baked block model to re-render, so they're skipped.
  */
 @EventBusSubscriber(modid = WildfireAdditions.MODID, value = Dist.CLIENT)
 public final class RetardantRenderHandler {
 
-    private static final float R = 0.85f, G = 0.05f, B = 0.05f, A = 0.32f;
-    private static final AABB FULL_CUBE = new AABB(0, 0, 0, 1, 1, 1);
+    private static final float R = 0.85f, G = 0.05f, B = 0.05f, A = 0.35f;
+    private static final float INFLATE = 1.02f; // Scale-up around centre to avoid z-fighting the real block.
     private static final double MAX_RENDER_DIST_SQR = 64.0 * 64.0;
-    private static final int MAX_BOXES = 8192; // Hard cap so a pathologically large area can't stall a frame.
+    private static final int MAX_MODELS = 4096; // Hard cap so a huge sprayed area can't stall a frame.
+
+    // All six face directions plus the null "general" bucket, so we gather every quad of the model.
+    private static final Direction[] DIRECTIONS = {
+            Direction.DOWN, Direction.UP, Direction.NORTH, Direction.SOUTH, Direction.WEST, Direction.EAST, null
+    };
 
     private RetardantRenderHandler() {
     }
@@ -51,11 +77,11 @@ public final class RetardantRenderHandler {
         long now = level.getGameTime();
         PoseStack pose = event.getPoseStack();
         MultiBufferSource.BufferSource buffers = mc.renderBuffers().bufferSource();
+        VertexConsumer consumer = buffers.getBuffer(RenderType.translucent());
+        BlockRenderDispatcher dispatcher = mc.getBlockRenderer();
+        RandomSource random = RandomSource.create();
 
-        pose.pushPose();
-        pose.translate(-cam.x, -cam.y, -cam.z); // Draw the boxes in world space; pose handles the camera offset.
-
-        int[] budget = {MAX_BOXES};
+        int[] budget = {MAX_MODELS};
         BlockPos.MutableBlockPos cursor = new BlockPos.MutableBlockPos();
         ClientCoatingStore.forEachCoating(now, packedPos -> {
             if (budget[0] <= 0) return;
@@ -67,23 +93,49 @@ public final class RetardantRenderHandler {
             if (dx * dx + dy * dy + dz * dz > MAX_RENDER_DIST_SQR) return;
 
             BlockState state = level.getBlockState(cursor);
-            // Mirror the sprayer's own rule: only tint blocks with a real collision shape. This skips
-            // non-solid undergrowth (tall grass, ferns, flowers, ...) whose thin, per-position offset
-            // shapes make the box tint misfit, and it also hides any such coatings sprayed before the
-            // application-side rule was added.
-            VoxelShape collision = state.getCollisionShape(level, cursor);
-            if (collision.isEmpty()) return;
+            // Only blocks that actually have a baked block model to re-render. Air/liquids and
+            // block-entity-rendered blocks (chests, signs, beds) have none.
+            if (state.getRenderShape() != RenderShape.MODEL) return;
 
-            VoxelShape shape = state.getShape(level, cursor);
-            AABB local = shape.isEmpty() ? FULL_CUBE : shape.bounds();
-            AABB box = local.inflate(0.01).move(cursor.getX(), cursor.getY(), cursor.getZ());
+            BakedModel model = dispatcher.getBlockModel(state);
+            ModelData modelData = model.getModelData(level, cursor, state, ModelData.EMPTY);
+            int light = LevelRenderer.getLightColor(level, cursor);
 
-            DebugRenderer.renderFilledBox(pose, buffers, box, R, G, B, A);
+            renderTintedModel(pose, consumer, state, model, modelData, cursor, cam, random, light);
             budget[0]--;
         });
 
+        buffers.endBatch(RenderType.translucent());
+    }
+
+    private static void renderTintedModel(PoseStack pose, VertexConsumer consumer, BlockState state,
+                                          BakedModel model, ModelData modelData, BlockPos pos, Vec3 cam,
+                                          RandomSource random, int light) {
+        pose.pushPose();
+        // Position in world space; the pose carries the -camera offset.
+        pose.translate(pos.getX() - cam.x, pos.getY() - cam.y, pos.getZ() - cam.z);
+        // Inflate a hair around the block centre so the tint sits just proud of the real geometry.
+        pose.translate(0.5, 0.5, 0.5);
+        pose.scale(INFLATE, INFLATE, INFLATE);
+        pose.translate(-0.5, -0.5, -0.5);
+
+        PoseStack.Pose last = pose.last();
+        float[] brightness = {1.0f, 1.0f, 1.0f, 1.0f};
+        int[] lightmap = {light, light, light, light};
+
+        for (Direction dir : DIRECTIONS) {
+            random.setSeed(state.getSeed(pos)); // Vanilla reseeds per face so model variants stay stable.
+            List<BakedQuad> quads = model.getQuads(state, dir, random, modelData, null);
+            for (BakedQuad quad : quads) {
+                // Push each quad tinted red at our alpha. readExistingColor=false => use (R,G,B,A)
+                // directly for every vertex instead of the quad's baked colour, giving a uniform red
+                // wash that still respects the texture's own transparency (cross-planes stay see-through).
+                consumer.putBulkData(last, quad, brightness, R, G, B, A, lightmap,
+                        OverlayTexture.NO_OVERLAY, false);
+            }
+        }
+
         pose.popPose();
-        buffers.endBatch();
     }
 
     // Wipe the client mirror on disconnect so coatings from one world never linger into the next.

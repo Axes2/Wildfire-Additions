@@ -135,19 +135,14 @@ public class RetardantSprayerItem extends Item {
     }
 
     /**
-     * Whether a block should take a coating. We coat only blocks with a real collision shape, which
-     * skips non-solid undergrowth - tall grass, ferns, flowers, saplings, vines, torches and the like.
-     *
-     * <p>Two reasons, both pointing the same way: those blocks are flammable undergrowth that PMWeather's
-     * fire clears no matter what (so protecting them is meaningless), and their thin, per-position
-     * <i>offset</i> cross shapes make a boxy red tint misfit or blow up to a full cube. Restricting to
-     * collidable blocks keeps every meaningful fireproofing surface (logs, planks, leaves, fences,
-     * slabs, stairs, the ground itself) while sidestepping the tint artifact entirely. The client
-     * renderer applies the same rule, so any coatings sprayed before this change also stop tinting.
+     * Whether a block should take a coating: anything solid enough to be a surface, i.e. not air and not
+     * a liquid. Undergrowth (tall grass, ferns, flowers, torches, ...) is coatable again now that the
+     * client renderer re-renders each block's real baked model - it tints their exact cross-planes
+     * instead of a misfitting box, so there's no longer a reason to skip them. Waterlogged solids still
+     * coat (they aren't liquid blocks); actual water/lava don't.
      */
     public static boolean isCoatable(Level level, BlockPos pos, BlockState state) {
-        if (state.isAir()) return false;
-        return !state.getCollisionShape(level, pos).isEmpty();
+        return !state.isAir() && !state.liquid();
     }
 
     // A dense cone of red retardant dust from the nozzle out to where the spray lands, widening with
