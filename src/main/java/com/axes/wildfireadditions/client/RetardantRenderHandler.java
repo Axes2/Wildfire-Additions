@@ -118,18 +118,17 @@ public final class RetardantRenderHandler {
 
             BakedModel model = dispatcher.getBlockModel(state);
             ModelData modelData = model.getModelData(level, cursor, state, ModelData.EMPTY);
-            int light = LevelRenderer.getLightColor(level, cursor);
 
-            renderStain(pose, consumer, state, model, modelData, cursor, cam, random, light);
+            renderStain(pose, consumer, level, state, model, modelData, cursor.immutable(), cam, random);
             budget[0]--;
         });
 
         buffers.endBatch(OVERLAY_RENDER_TYPE);
     }
 
-    private static void renderStain(PoseStack pose, VertexConsumer consumer, BlockState state,
+    private static void renderStain(PoseStack pose, VertexConsumer consumer, ClientLevel level, BlockState state,
                                     BakedModel model, ModelData modelData, BlockPos pos, Vec3 cam,
-                                    RandomSource random, int light) {
+                                    RandomSource random) {
         // Direction from the block centre toward the camera, so the overlay can be lifted a hair in
         // front of the real block (beats z-fighting) as a rigid shift - not a scale, so it can't cause
         // neighbouring blocks' overlays to overlap into seams.
@@ -149,6 +148,15 @@ public final class RetardantRenderHandler {
         PoseStack.Pose last = pose.last();
 
         for (Direction dir : DIRECTIONS) {
+            // Light doesn't propagate INSIDE an opaque block, so a solid cube's own position reads as
+            // dark regardless of time of day. Vanilla's own block renderer sidesteps this by sampling
+            // each face's light from the block just past that face (e.g. a top face reads the air
+            // above it), not the block's own position - match that here, per direction, or the coating
+            // renders black on every solid surface. A null-direction quad (cross-plane plants, which
+            // don't cull against a neighbour) has no such neighbour, so it uses the block's own light.
+            BlockPos lightPos = dir != null ? pos.relative(dir) : pos;
+            int light = LevelRenderer.getLightColor(level, lightPos);
+
             random.setSeed(state.getSeed(pos)); // Vanilla reseeds per face so model variants stay stable.
             List<BakedQuad> quads = model.getQuads(state, dir, random, modelData, null);
             for (BakedQuad quad : quads) {
