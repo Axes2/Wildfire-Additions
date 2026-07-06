@@ -113,8 +113,8 @@ public class RetardantSprayerItem extends Item {
                     case X -> center.offset(0, a, b);
                 };
                 BlockState state = level.getBlockState(pos);
-                // Skip the two cases the design calls out: empty air and blocks already coated.
-                if (state.isAir()) continue;
+                // Skip empty air, blocks already coated, and non-solid undergrowth (see isCoatable).
+                if (!isCoatable(level, pos, state)) continue;
                 if (RetardantCoating.isCoated(level, pos)) continue;
 
                 RetardantCoating.coat(serverLevel, pos);
@@ -132,6 +132,22 @@ public class RetardantSprayerItem extends Item {
 
         level.playSound(null, center, SoundEvents.FIRE_EXTINGUISH, SoundSource.PLAYERS,
                 0.4f, 1.6f + level.random.nextFloat() * 0.2f);
+    }
+
+    /**
+     * Whether a block should take a coating. We coat only blocks with a real collision shape, which
+     * skips non-solid undergrowth - tall grass, ferns, flowers, saplings, vines, torches and the like.
+     *
+     * <p>Two reasons, both pointing the same way: those blocks are flammable undergrowth that PMWeather's
+     * fire clears no matter what (so protecting them is meaningless), and their thin, per-position
+     * <i>offset</i> cross shapes make a boxy red tint misfit or blow up to a full cube. Restricting to
+     * collidable blocks keeps every meaningful fireproofing surface (logs, planks, leaves, fences,
+     * slabs, stairs, the ground itself) while sidestepping the tint artifact entirely. The client
+     * renderer applies the same rule, so any coatings sprayed before this change also stop tinting.
+     */
+    public static boolean isCoatable(Level level, BlockPos pos, BlockState state) {
+        if (state.isAir()) return false;
+        return !state.getCollisionShape(level, pos).isEmpty();
     }
 
     // A dense cone of red retardant dust from the nozzle out to where the spray lands, widening with

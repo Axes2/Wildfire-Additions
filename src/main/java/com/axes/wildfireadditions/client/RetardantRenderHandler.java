@@ -67,6 +67,13 @@ public final class RetardantRenderHandler {
             if (dx * dx + dy * dy + dz * dz > MAX_RENDER_DIST_SQR) return;
 
             BlockState state = level.getBlockState(cursor);
+            // Mirror the sprayer's own rule: only tint blocks with a real collision shape. This skips
+            // non-solid undergrowth (tall grass, ferns, flowers, ...) whose thin, per-position offset
+            // shapes make the box tint misfit, and it also hides any such coatings sprayed before the
+            // application-side rule was added.
+            VoxelShape collision = state.getCollisionShape(level, cursor);
+            if (collision.isEmpty()) return;
+
             VoxelShape shape = state.getShape(level, cursor);
             AABB local = shape.isEmpty() ? FULL_CUBE : shape.bounds();
             AABB box = local.inflate(0.01).move(cursor.getX(), cursor.getY(), cursor.getZ());
