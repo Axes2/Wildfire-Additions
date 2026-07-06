@@ -1,6 +1,7 @@
 package com.axes.wildfireadditions.registry;
 
 import com.axes.wildfireadditions.WildfireAdditions;
+import com.axes.wildfireadditions.block.entity.FireSprinklerBlockEntity;
 import com.axes.wildfireadditions.block.entity.PumpBoxBlockEntity;
 import net.minecraft.core.registries.Registries;
 import net.minecraft.world.level.block.entity.BlockEntityType;
@@ -12,4 +13,7 @@ public class ModBlockEntities {
 
     public static final Supplier<BlockEntityType<PumpBoxBlockEntity>> PUMP_BOX_BE = BLOCK_ENTITIES.register("pump_box",
             () -> BlockEntityType.Builder.of(PumpBoxBlockEntity::new, ModBlocks.PUMP_BOX.get()).build(null));
+
+    public static final Supplier<BlockEntityType<FireSprinklerBlockEntity>> FIRE_SPRINKLER_BE = BLOCK_ENTITIES.register("fire_sprinkler",
+            () -> BlockEntityType.Builder.of(FireSprinklerBlockEntity::new, ModBlocks.FIRE_SPRINKLER.get()).build(null));
 }

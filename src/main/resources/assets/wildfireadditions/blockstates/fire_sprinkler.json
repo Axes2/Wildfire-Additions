@@ -1,7 +1,10 @@
 {
   "variants": {
-    "": {
-      "model": "wildfireadditions:block/fire_sprinkler"
+    "active=false": {
+      "model": "wildfireadditions:block/fire_sprinkler_base"
+    },
+    "active=true": {
+      "model": "wildfireadditions:block/fire_sprinkler_base"
     }
   }
 }

@@ -62,7 +62,7 @@ public class PumpBoxBlock extends Block implements EntityBlock {
         return InteractionResult.sidedSuccess(level.isClientSide);
     }
 
-    private boolean isAdjacentToWater(Level level, BlockPos pos) {
+    public static boolean isAdjacentToWater(Level level, BlockPos pos) {
         for (Direction direction : Direction.values()) {
             FluidState fluidState = level.getFluidState(pos.relative(direction));
             if (fluidState.isSourceOfType(Fluids.WATER) || fluidState.is(Fluids.FLOWING_WATER)) {

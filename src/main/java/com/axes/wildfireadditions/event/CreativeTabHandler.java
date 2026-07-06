@@ -28,6 +28,7 @@ public final class CreativeTabHandler {
         if (!event.getTabKey().equals(PMWEATHER_TAB)) return;
 
         event.accept(ModItems.PUMP_BOX_ITEM);
+        event.accept(ModItems.FIRE_SPRINKLER_ITEM);
         event.accept(ModItems.HOSE);
         event.accept(ModItems.DRIP_TORCH);
         event.accept(ModItems.RETARDANT_SPRAYER);
