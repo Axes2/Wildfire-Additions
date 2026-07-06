@@ -52,18 +52,26 @@ import java.util.Set;
  *       200 cheap lookups instead of millions of block checks - and creep toward the nearest chunk
  *       that's actually carrying fire. Only chunks the server already has loaded are read, so this
  *       never forces distant chunks to load just to peek at them.</li>
- *   <li><b>Merges seamlessly.</b> Our embers are real {@code PMWFireBlock}s, so when one reaches the
- *       wildfire we simply stop tracking it - no override, no reset. From that moment it's an
- *       ordinary wildfire block that grows and behaves like any other.</li>
+ *   <li><b>Merges into a firebreak, never a fuse.</b> Our embers are real {@code PMWFireBlock}s at a
+ *       separate set of positions from the wildfire's own blocks, which we never touch - so we neither
+ *       override nor reset the wildfire. Crucially, we deliberately do NOT hand our embers off to the
+ *       wildfire when they meet it: every ember stays capped until it burns its own patch out into
+ *       (non-flammable) charred ground and is then pruned. So where a backburn meets the main fire, the
+ *       fuel between has already been consumed and the boundary is burned-out ground the wildfire can't
+ *       cross - a firebreak. (An earlier version released embers from the cap on contact so they would
+ *       "merge" into the wildfire. That was a mistake: a released ember becomes an uncapped, growing
+ *       fire, which is then adjacent to the next tracked ember and releases it in turn - so the whole
+ *       connected backburn would "infect" into full wildfire one ember at a time, roughly a block every
+ *       few ticks. Keeping embers capped until they burn out removes that failure mode entirely.)</li>
  * </ul>
  *
  * <p>The tracked set needs to be large: a slow, wide backfire that's actually starving the wildfire of
- * fuel (rather than a thin single-file trail) can easily need thousands of embers alive at once. Two
- * things keep that affordable: the expensive per-ember check (a 26-neighbour scan, for merge detection)
- * runs far less often than the cheap one (a single block-state read, for the intensity clamp - see
- * {@link #clampIntensity}); and each creep pass only lets a bounded, <i>randomly shuffled</i> subset of
- * embers attempt to advance, so the front stays roughly even instead of a few lucky embers (always the
- * same ones, in a fixed iteration order) racing ahead while the rest of the line never gets a turn.
+ * fuel (rather than a thin single-file trail) can easily need thousands of embers alive at once. That
+ * stays affordable because the only per-ember work every tick is a single block-state read (the
+ * intensity clamp - see {@link #clampIntensity}); embers leave the set only by burning out. Each creep
+ * pass also lets only a bounded, <i>randomly shuffled</i> subset of embers attempt to advance, so the
+ * front stays roughly even instead of a few lucky embers (always the same ones, in a fixed iteration
+ * order) racing ahead while the rest of the line never gets a turn.
  */
 @EventBusSubscriber(modid = WildfireAdditions.MODID)
 public class DripTorchFireHandler {
@@ -76,21 +84,16 @@ public class DripTorchFireHandler {
     private static final int CAP = 1;
 
     // Raised substantially: a wide, slow-advancing backfire that's actually starving a fire line of
-    // fuel needs far more simultaneously-tracked embers than a thin trail ever did. Kept affordable by
-    // splitting the per-ember work (see CLAMP_PERIOD/MERGE_CHECK_PERIOD below) rather than by keeping
-    // this small.
+    // fuel needs far more simultaneously-tracked embers than a thin trail ever did. Affordable because
+    // the only per-ember work each tick is one cheap block-state read (the intensity clamp).
     private static final int MAX_EMBERS = 4000;
 
     // The intensity clamp is one block-state read (plus a write only when it fires) per tracked ember,
     // and per the class doc it MUST run essentially every tick to keep the wind-spread guarantee
-    // airtight - unlike everything else here, its safety doesn't come from running often, it comes
-    // from the cap value itself, but it still has to run before each ember's own next random tick.
+    // airtight - its safety comes from the cap value itself, but the clamp still has to run before each
+    // ember's own next random tick. This is also the only path by which an ember leaves the set: when
+    // it's burned out into non-fire ground, the clamp pass prunes it.
     private static final int CLAMP_PERIOD = 1; // Ticks between intensity-clamp passes.
-
-    // Detecting "has this ember touched the wildfire" is a 26-neighbour scan - much pricier per ember
-    // than the clamp - but a few ticks of lag before releasing an ember is completely harmless, so it
-    // runs far less often. This is what makes the much larger MAX_EMBERS affordable.
-    private static final int MERGE_CHECK_PERIOD = 5;
 
     // ~1 block/second: one step every CREEP_PERIOD ticks (20 ticks = 1 second).
     private static final int CREEP_PERIOD = 20;
@@ -149,9 +152,6 @@ public class DripTorchFireHandler {
         if (time % CLAMP_PERIOD == 0) {
             clampIntensity(level, set);
         }
-        if (time % MERGE_CHECK_PERIOD == 0) {
-            checkMerges(level, set);
-        }
         if (time % CREEP_PERIOD == 0) {
             creepTowardFire(level, set);
         }
@@ -173,21 +173,6 @@ public class DripTorchFireHandler {
             int intensity = state.getValue(PMWFireBlock.INTENSITY);
             if (intensity > CAP) {
                 level.setBlockAndUpdate(pos, state.setValue(PMWFireBlock.INTENSITY, CAP));
-            }
-        }
-
-        set.removeAll(toRemove);
-    }
-
-    // Releases any tracked ember that has reached the real wildfire (so it merges in and behaves
-    // normally from then on). A 26-neighbour scan per ember - much pricier than the intensity clamp -
-    // but a few ticks of lag before releasing one is harmless, so this runs on a slower cadence.
-    private static void checkMerges(ServerLevel level, Set<BlockPos> set) {
-        List<BlockPos> toRemove = new ArrayList<>();
-
-        for (BlockPos pos : set) {
-            if (isAdjacentToWildfire(level, set, pos)) {
-                toRemove.add(pos); // Reached the wildfire: stop managing, let it merge seamlessly.
             }
         }
 
@@ -231,7 +216,9 @@ public class DripTorchFireHandler {
     private static void stepToward(ServerLevel level, BlockPos ember, int targetX, int targetZ, int stepSize) {
         double dx = targetX - ember.getX();
         double dz = targetZ - ember.getZ();
-        if (dx * dx + dz * dz <= 2.5) return; // Already there - merge handles it.
+        // Already at the fire: don't plant into or past it. This ember just holds the line here and
+        // burns out, leaving charred ground the wildfire can't cross.
+        if (dx * dx + dz * dz <= 2.5) return;
 
         int tx = ember.getX() + (int) Math.signum(dx) * stepSize;
         int tz = ember.getZ() + (int) Math.signum(dz) * stepSize;
@@ -240,22 +227,6 @@ public class DripTorchFireHandler {
         if (Math.abs(top.getY() - ember.getY()) > MAX_STEP_HEIGHT) return;
 
         plantEmber(level, top);
-    }
-
-    private static boolean isAdjacentToWildfire(ServerLevel level, Set<BlockPos> set, BlockPos pos) {
-        BlockPos.MutableBlockPos m = new BlockPos.MutableBlockPos();
-        for (int dx = -1; dx <= 1; dx++) {
-            for (int dy = -1; dy <= 1; dy++) {
-                for (int dz = -1; dz <= 1; dz++) {
-                    if (dx == 0 && dy == 0 && dz == 0) continue;
-                    m.set(pos.getX() + dx, pos.getY() + dy, pos.getZ() + dz);
-                    if (level.getBlockState(m).getBlock() instanceof PMWFireBlock && !set.contains(m)) {
-                        return true;
-                    }
-                }
-            }
-        }
-        return false;
     }
 
     private static BlockPos findNearestWildfire(ServerLevel level, Set<BlockPos> set, BlockPos origin) {
