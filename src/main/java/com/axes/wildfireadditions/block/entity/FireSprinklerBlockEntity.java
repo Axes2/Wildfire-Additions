@@ -53,7 +53,7 @@ public class FireSprinklerBlockEntity extends BlockEntity {
     private static final int SCAN_RANGE = 30; // horizontal detection radius, in blocks
     private static final int VERTICAL_RANGE = 12; // vertical detection reach, in blocks
 
-    private static final int RETARGET_PERIOD = 40; // reacquire the closest fire every 2 seconds
+    private static final int RETARGET_PERIOD = 10; // reacquire the closest fire twice a second, so the turret always tracks the nearest flame
     private static final int SPRAY_PERIOD = 2; // run the spray/douse pass every 2 ticks, matching the hose
 
     private static final float YAW_STEP = 12.0f; // max degrees the head swivels per tick toward its target
@@ -169,7 +169,7 @@ public class FireSprinklerBlockEntity extends BlockEntity {
         // splash right on the fire, so the visible stream lands on the target instead of sailing past it.
         WaterStream.TargetTrace trace = WaterStream.traceToTarget(level, origin, aim, STREAM_SPEED, MAX_RANGE, targetCenter, WaterStream.TARGET_TOLERANCE);
         Vec3 impact = trace.reached() ? trace.endPosition() : null;
-        WaterStream.spawnStreamParticles(level, origin, aim, STREAM_SPEED, trace.flightTime(), impact, be.ticker);
+        WaterStream.spawnTurretStream(level, origin, aim, STREAM_SPEED, trace.flightTime(), impact, be.ticker);
     }
 
     // Scans a radius around the turret for fire blocks (PMWeather fire, plus vanilla fire as a fallback),

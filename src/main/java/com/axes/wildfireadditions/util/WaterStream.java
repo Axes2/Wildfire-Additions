@@ -168,6 +168,58 @@ public final class WaterStream {
         }
     }
 
+    // Turret-specific stream: a much denser, higher-volume high-pressure jet than the handheld hose,
+    // with a thread of misty haze woven through it and a burst of spray at the nozzle so it reads as a
+    // pressurised monitor rather than a garden hose. Same arc as spawnStreamParticles, just far more
+    // particles plus the mist layer.
+    private static final int JET_SAMPLES = 24; // sample points along the arc (vs 14 for the hose)
+    private static final int JET_DROPLETS_PER_SAMPLE = 4; // water droplets per sample (vs 2)
+    private static final double JET_SPREAD_NEAR = 0.03; // tight and cohesive right at the nozzle
+    private static final double JET_SPREAD_FAR = 0.4; // fans out toward the target
+    private static final int JET_MIST_EVERY = 2; // every Nth sample also throws a wisp of mist
+
+    public static void spawnTurretStream(Level level, Vec3 origin, Vec3 direction, double speed, double flightTime, @Nullable Vec3 impact, long animTick) {
+        flightTime = Math.max(flightTime, 0.001);
+        double spacing = flightTime / JET_SAMPLES;
+        double phase = (animTick / 20.0) % spacing;
+        Vec3 dir = direction.normalize();
+
+        // Pressurised burst of mist blowing out of the nozzle.
+        for (int i = 0; i < 4; i++) {
+            Vec3 m = jitterPerpendicular(origin, direction, level.random, 0.12);
+            level.addParticle(ParticleTypes.CLOUD, m.x, m.y, m.z, dir.x * 0.25, dir.y * 0.25, dir.z * 0.25);
+        }
+
+        for (int i = 0; i < JET_SAMPLES; i++) {
+            double t = i * spacing + phase;
+            if (t > flightTime) continue;
+
+            Vec3 point = positionAtTime(origin, direction, speed, t);
+            double frac = t / flightTime;
+            double spread = JET_SPREAD_NEAR + frac * (JET_SPREAD_FAR - JET_SPREAD_NEAR);
+
+            for (int d = 0; d < JET_DROPLETS_PER_SAMPLE; d++) {
+                Vec3 droplet = jitterPerpendicular(point, direction, level.random, spread);
+                level.addParticle(ParticleTypes.FALLING_WATER, droplet.x, droplet.y, droplet.z, 0.0, 0.0, 0.0);
+            }
+
+            // A haze of mist threaded through the jet, drifting along with the stream.
+            if (i % JET_MIST_EVERY == 0) {
+                Vec3 mist = jitterPerpendicular(point, direction, level.random, spread * 1.5);
+                level.addParticle(ParticleTypes.CLOUD, mist.x, mist.y, mist.z, dir.x * 0.05, dir.y * 0.05, dir.z * 0.05);
+            }
+        }
+
+        // A heavier plume where the jet slams into the fire.
+        if (impact != null) {
+            for (int i = 0; i < 5; i++) {
+                level.addParticle(ParticleTypes.SPLASH, impact.x, impact.y, impact.z,
+                        (level.random.nextDouble() - 0.5) * 0.2, 0.15, (level.random.nextDouble() - 0.5) * 0.2);
+            }
+            level.addParticle(ParticleTypes.CLOUD, impact.x, impact.y + 0.1, impact.z, 0.0, 0.06, 0.0);
+        }
+    }
+
     // Server-side: the 3x3x3 douse pass at the point the stream lands. Identical for the hose and the
     // turret - continuous sizzle/steam every pass, a hiss when the stream first bites, actual cooling
     // gated to COOL_PERIOD (so dousing a block takes real, sustained spray), and a heavier steam column

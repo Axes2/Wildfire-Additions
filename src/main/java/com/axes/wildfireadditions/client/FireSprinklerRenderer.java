@@ -30,6 +30,10 @@ public class FireSprinklerRenderer implements BlockEntityRenderer<FireSprinklerB
     public static final ModelResourceLocation HEAD_MODEL = ModelResourceLocation.standalone(
             ResourceLocation.fromNamespaceAndPath(WildfireAdditions.MODID, "block/fire_sprinkler_head"));
 
+    // The head is drawn with flat lighting (no ambient occlusion) so it reads a touch brighter/flatter
+    // than the chunk-baked base. Knock the colour down a bit so it blends in instead of standing out.
+    private static final float SHADE = 0.72f;
+
     private final BlockRenderDispatcher blockRenderer;
 
     public FireSprinklerRenderer(BlockEntityRendererProvider.Context context) {
@@ -58,7 +62,7 @@ public class FireSprinklerRenderer implements BlockEntityRenderer<FireSprinklerB
         VertexConsumer consumer = buffer.getBuffer(RenderType.cutout());
         blockRenderer.getModelRenderer().renderModel(
                 poseStack.last(), consumer, state, model,
-                1.0f, 1.0f, 1.0f, headLight, packedOverlay, ModelData.EMPTY, RenderType.cutout());
+                SHADE, SHADE, SHADE, headLight, packedOverlay, ModelData.EMPTY, RenderType.cutout());
 
         poseStack.popPose();
     }
