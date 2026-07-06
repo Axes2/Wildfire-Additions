@@ -97,14 +97,56 @@ public final class WaterStream {
         return new TrajectoryResult(pos, null, MAX_STEPS * STEP_DT);
     }
 
-    // Client-side: hand-place FALLING_WATER particles directly along the real simulated arc. The whole
-    // arc, nozzle to impact, gets populated every single pass so it always reads as one solid stream; a
-    // small phase offset tied to `animTick` continuously drifts where each pass's sample points fall,
-    // keeping the (otherwise static) full-length stream looking alive rather than frozen. A little
-    // SPLASH burst is placed right where the stream lands so that feedback stays in sync with the cooling.
-    public static void spawnStreamParticles(Level level, Vec3 origin, Vec3 direction, double speed, double maxRange, long animTick) {
-        TrajectoryResult trajectory = traceTrajectory(level, null, origin, direction, speed, maxRange);
-        double flightTime = Math.max(trajectory.flightTime(), 0.001);
+    // How close (in blocks) the simulated arc must pass to a fire block for the turret to consider it
+    // reachable. Fire blocks have no collision, so an aimed stream sails straight through them; we detect
+    // a hit by proximity of the arc to the fire rather than by where the stream eventually lands.
+    public static final double TARGET_TOLERANCE = 1.25;
+
+    // The result of tracing an arc toward a specific target point: whether the arc passed within
+    // TARGET_TOLERANCE of it before hitting any solid block, where it got to, and the flight time there.
+    public record TargetTrace(boolean reached, Vec3 endPosition, double flightTime) {
+    }
+
+    // Traces the arc from `origin` down `direction` and reports whether it reaches `targetCenter` (passes
+    // within `tolerance`) before a solid block blocks it. This is how the turret does both line-of-sight
+    // ("can the water actually get to this fire, or is there a wall in the way?") and visual truncation -
+    // fire blocks don't collide, so a plain landing-point trace would sail through the fire and stop far
+    // beyond it, which is exactly the trap the old code fell into.
+    public static TargetTrace traceToTarget(Level level, Vec3 origin, Vec3 direction, double speed, double maxRange, Vec3 targetCenter, double tolerance) {
+        Vec3 pos = origin;
+        Vec3 velocity = direction.normalize().scale(speed);
+        double tolSq = tolerance * tolerance;
+
+        for (int step = 0; step < MAX_STEPS; step++) {
+            double elapsed = step * STEP_DT;
+
+            if (pos.distanceToSqr(targetCenter) <= tolSq) {
+                return new TargetTrace(true, pos, elapsed); // arc reached the fire
+            }
+
+            Vec3 nextPos = pos.add(velocity.scale(STEP_DT));
+            if (nextPos.distanceTo(origin) > maxRange) {
+                return new TargetTrace(false, pos, elapsed); // dissipated short of the fire
+            }
+
+            HitResult hit = level.clip(new ClipContext(pos, nextPos, ClipContext.Block.COLLIDER, ClipContext.Fluid.NONE, CollisionContext.empty()));
+            if (hit.getType() == HitResult.Type.BLOCK) {
+                return new TargetTrace(false, ((BlockHitResult) hit).getLocation(), elapsed + STEP_DT); // blocked by cover
+            }
+
+            pos = nextPos;
+            velocity = velocity.add(0, -GRAVITY * STEP_DT, 0);
+        }
+        return new TargetTrace(false, pos, MAX_STEPS * STEP_DT);
+    }
+
+    // Client-side: hand-place FALLING_WATER particles along the simulated arc, from the nozzle up to
+    // `flightTime` (the caller passes the time at which the arc reaches its impact/target, so the visible
+    // stream stops there instead of overshooting). The whole drawn span is populated every pass so it
+    // reads as one solid stream; a small `animTick`-driven phase offset keeps it looking alive. A SPLASH
+    // burst is placed at `impact` (the fire, or the surface the stream lands on) when non-null.
+    public static void spawnStreamParticles(Level level, Vec3 origin, Vec3 direction, double speed, double flightTime, @Nullable Vec3 impact, long animTick) {
+        flightTime = Math.max(flightTime, 0.001);
         double spacing = flightTime / TIME_SAMPLES_PER_PASS;
         double phase = (animTick / 20.0) % spacing;
 
@@ -121,8 +163,7 @@ public final class WaterStream {
             }
         }
 
-        if (trajectory.hitBlock() != null) {
-            Vec3 impact = trajectory.endPosition();
+        if (impact != null) {
             level.addParticle(ParticleTypes.SPLASH, impact.x, impact.y, impact.z, 0.0, 0.1, 0.0);
         }
     }

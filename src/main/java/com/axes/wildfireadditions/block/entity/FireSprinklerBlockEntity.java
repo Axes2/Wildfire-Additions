@@ -52,7 +52,6 @@ public class FireSprinklerBlockEntity extends BlockEntity {
 
     private static final int SCAN_RANGE = 30; // horizontal detection radius, in blocks
     private static final int VERTICAL_RANGE = 12; // vertical detection reach, in blocks
-    private static final double REACH_TOLERANCE = 1.5; // how close the simulated impact must land to a fire to count as reachable
 
     private static final int RETARGET_PERIOD = 40; // reacquire the closest fire every 2 seconds
     private static final int SPRAY_PERIOD = 2; // run the spray/douse pass every 2 ticks, matching the hose
@@ -120,16 +119,27 @@ public class FireSprinklerBlockEntity extends BlockEntity {
         if (be.target == null) return;
         if (be.ticker % SPRAY_PERIOD != 0) return;
 
+        // The fire we were aiming at may already be out; if so, drop it and wait for the next retarget
+        // rather than hosing empty air.
+        BlockState targetState = serverLevel.getBlockState(be.target);
+        if (!(targetState.getBlock() instanceof PMWFireBlock) && !targetState.is(Blocks.FIRE)) {
+            be.setTarget(null);
+            return;
+        }
+
         Vec3 origin = be.nozzleOrigin();
-        Vec3 aim = WaterStream.solveBallisticAim(origin, Vec3.atCenterOf(be.target), STREAM_SPEED);
+        Vec3 targetCenter = Vec3.atCenterOf(be.target);
+        Vec3 aim = WaterStream.solveBallisticAim(origin, targetCenter, STREAM_SPEED);
         if (aim == null) {
             be.setTarget(null); // drifted out of ballistic range; wait for the next retarget
             return;
         }
 
-        WaterStream.TrajectoryResult trajectory = WaterStream.traceTrajectory(level, null, origin, aim, STREAM_SPEED, MAX_RANGE);
-        if (trajectory.hitBlock() != null) {
-            WaterStream.extinguishAt(serverLevel, trajectory.hitBlock(), be.ticker);
+        // Only douse if the arc can still actually reach the fire (nothing moved in to block it). The
+        // douse happens at the fire block itself, not where the stream would eventually land - fire has
+        // no collision, so the stream passes through it and lands well beyond.
+        if (WaterStream.traceToTarget(level, origin, aim, STREAM_SPEED, MAX_RANGE, targetCenter, WaterStream.TARGET_TOLERANCE).reached()) {
+            WaterStream.extinguishAt(serverLevel, be.target, be.ticker);
         }
     }
 
@@ -151,9 +161,15 @@ public class FireSprinklerBlockEntity extends BlockEntity {
         if (be.ticker % SPRAY_PERIOD != 0) return;
 
         Vec3 origin = be.nozzleOrigin();
-        Vec3 aim = WaterStream.solveBallisticAim(origin, Vec3.atCenterOf(be.target), STREAM_SPEED);
+        Vec3 targetCenter = Vec3.atCenterOf(be.target);
+        Vec3 aim = WaterStream.solveBallisticAim(origin, targetCenter, STREAM_SPEED);
         if (aim == null) return;
-        WaterStream.spawnStreamParticles(level, origin, aim, STREAM_SPEED, MAX_RANGE, be.ticker);
+
+        // Draw the arc only as far as the fire (fire has no collision, so trace by proximity to it) and
+        // splash right on the fire, so the visible stream lands on the target instead of sailing past it.
+        WaterStream.TargetTrace trace = WaterStream.traceToTarget(level, origin, aim, STREAM_SPEED, MAX_RANGE, targetCenter, WaterStream.TARGET_TOLERANCE);
+        Vec3 impact = trace.reached() ? trace.endPosition() : null;
+        WaterStream.spawnStreamParticles(level, origin, aim, STREAM_SPEED, trace.flightTime(), impact, be.ticker);
     }
 
     // Scans a radius around the turret for fire blocks (PMWeather fire, plus vanilla fire as a fallback),
@@ -188,10 +204,9 @@ public class FireSprinklerBlockEntity extends BlockEntity {
             Vec3 aim = WaterStream.solveBallisticAim(origin, targetCenter, STREAM_SPEED);
             if (aim == null) continue; // out of ballistic range
 
-            WaterStream.TrajectoryResult trajectory = WaterStream.traceTrajectory(level, null, origin, aim, STREAM_SPEED, MAX_RANGE);
-            if (trajectory.hitBlock() == null) continue;
-            if (trajectory.endPosition().distanceToSqr(targetCenter) <= REACH_TOLERANCE * REACH_TOLERANCE) {
-                return candidate; // reachable - the stream actually lands on this fire
+            // Reachable if the arc passes through/near the fire before any solid block blocks it.
+            if (WaterStream.traceToTarget(level, origin, aim, STREAM_SPEED, MAX_RANGE, targetCenter, WaterStream.TARGET_TOLERANCE).reached()) {
+                return candidate;
             }
         }
         return null; // everything in range is blocked behind cover

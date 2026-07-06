@@ -61,9 +61,11 @@ public class HoseItem extends Item {
         Vec3 eyePos = player.getEyePosition();
         Vec3 lookVec = player.getLookAngle();
 
-        // Client-side: draw the stream along the real simulated arc.
+        // Client-side: draw the stream along the real simulated arc, stopping where it lands.
         if (level.isClientSide()) {
-            WaterStream.spawnStreamParticles(level, eyePos, lookVec, STREAM_SPEED, MAX_RANGE, player.tickCount);
+            WaterStream.TrajectoryResult trajectory = WaterStream.traceTrajectory(level, player, eyePos, lookVec, STREAM_SPEED, MAX_RANGE);
+            Vec3 impact = trajectory.hitBlock() != null ? trajectory.endPosition() : null;
+            WaterStream.spawnStreamParticles(level, eyePos, lookVec, STREAM_SPEED, trajectory.flightTime(), impact, player.tickCount);
             return;
         }
 
