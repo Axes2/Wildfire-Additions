@@ -26,6 +26,17 @@ import net.minecraft.util.Mth;
  * Downrange it "breaks up": it picks up a little turbulence, swells and fades like a jet dissolving
  * into spray, shedding the odd wisp of mist. On contact with the world it dies on the spot and throws
  * its own splash/mist, so impact effects always happen exactly where water really arrived.
+ *
+ * <p>Wind: PMWeather's {@code WindEngine} is applied to <em>every</em> vanilla particle each client
+ * tick (its {@code ParticleMixin} makes every Particle carry velocity accessors, and its client tick
+ * handler adds wind, multiplies velocity by 0.98 friction, and clamps horizontal speed down to roughly
+ * wind speed). Left unchecked that drags the droplets off the ballistic arc the server actually douses
+ * along, so the water visibly misses the fire it's putting out. To fix the disconnect, a coherent
+ * droplet keeps its own authoritative velocity and re-asserts it at the top of every tick, discarding
+ * whatever the wind pass did to it - so most of the stream flies its true arc and lands on the fire. A
+ * small random fraction ({@link #WIND_CAUGHT_CHANCE}) instead leaves its velocity alone, letting the
+ * wind sweep it away as spray peeling off the jet (the white mist layer is likewise left wind-driven).
+ * When PMWeather isn't present the re-assert is simply a harmless no-op.
  */
 public class WaterJetParticle extends TextureSheetParticle {
 
@@ -42,9 +53,19 @@ public class WaterJetParticle extends TextureSheetParticle {
     private static final float BASE_ALPHA = 0.85f;
     private static final float GROWTH = 0.55f; // fractional quad growth over a full lifetime
 
+    // Fraction of jet droplets that let the wind carry them off as spray instead of holding their arc.
+    private static final float WIND_CAUGHT_CHANCE = 0.14f;
+
     // Per-droplet colour identity: how long it stays white and which blue it clears into.
     private final int whiteTicks;
     private final float blueR, blueG, blueB;
+
+    // When false, the droplet re-asserts its own ballistic velocity each tick so external per-tick
+    // velocity changes (PMWeather's wind pass) can't drag it off its arc; velX/Y/Z is that authoritative
+    // velocity, carried across ticks independently of the shared xd/yd/zd the wind pass mutates. When
+    // true, the droplet is deliberately left to the wind and becomes windblown spray.
+    private final boolean windCaught;
+    private double velX, velY, velZ;
 
     protected WaterJetParticle(ClientLevel level, double x, double y, double z,
                                double vx, double vy, double vz, SpriteSet sprites) {
@@ -52,13 +73,16 @@ public class WaterJetParticle extends TextureSheetParticle {
         // The 4-arg super is used deliberately: the motion-taking vanilla constructor randomises the
         // velocity it is given, and these droplets must fly the exact ballistic velocity they were
         // emitted with or the visible stream diverges from the server's trace.
-        this.xd = vx;
-        this.yd = vy;
-        this.zd = vz;
+        this.xd = this.velX = vx;
+        this.yd = this.velY = vy;
+        this.zd = this.velZ = vz;
+
+        this.windCaught = this.random.nextFloat() < WIND_CAUGHT_CHANCE;
 
         this.setSize(0.05f, 0.05f);
         this.quadSize = 0.10f + this.random.nextFloat() * 0.06f;
-        this.lifetime = 40 + this.random.nextInt(13);
+        // Wind-caught spray dissipates quickly (it's fine, aerated droplets); coherent water carries far.
+        this.lifetime = this.windCaught ? 16 + this.random.nextInt(10) : 40 + this.random.nextInt(13);
         this.hasPhysics = true;
 
         this.whiteTicks = 3 + this.random.nextInt(4);
@@ -86,6 +110,16 @@ public class WaterJetParticle extends TextureSheetParticle {
             return;
         }
 
+        // Re-assert the droplet's own velocity, discarding any per-tick change something else made to
+        // xd/yd/zd since the last tick - specifically PMWeather's wind pass, which otherwise applies
+        // friction and clamps horizontal speed down to wind speed, sweeping the droplet off the arc the
+        // server douses along. Wind-caught droplets skip this and keep whatever the wind did to them.
+        if (!this.windCaught) {
+            this.xd = this.velX;
+            this.yd = this.velY;
+            this.zd = this.velZ;
+        }
+
         // Pure ballistics: full gravity, no air drag. This is the exact integration the server-side
         // WaterStream trace performs, so the visible droplets land where the douse logic douses.
         this.yd -= GRAVITY_PER_TICK;
@@ -94,6 +128,14 @@ public class WaterJetParticle extends TextureSheetParticle {
         if (this.age > BREAKUP_AGE) {
             this.xd += (this.random.nextDouble() - 0.5) * 0.004;
             this.zd += (this.random.nextDouble() - 0.5) * 0.004;
+        }
+
+        // Persist this tick's authoritative velocity (gravity + turbulence folded in) for the next
+        // re-assert, so coherent droplets accumulate their own physics but never the wind's.
+        if (!this.windCaught) {
+            this.velX = this.xd;
+            this.velY = this.yd;
+            this.velZ = this.zd;
         }
 
         double ix = this.xd, iy = this.yd, iz = this.zd; // intended motion this tick

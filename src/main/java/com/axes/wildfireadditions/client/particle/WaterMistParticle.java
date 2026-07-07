@@ -15,6 +15,10 @@ import net.minecraft.util.Mth;
  * breaks up in flight, and thrown up as a plume wherever droplets land. It decelerates quickly (unlike
  * the ballistic droplets), balloons to roughly three times its spawn size and gently fades and rises
  * like fine spray hanging in the air.
+ *
+ * <p>Unlike the coherent jet droplets, the mist deliberately does nothing to resist PMWeather's wind
+ * pass - it's fine, aerated spray, so being carried off on the wind is exactly the intended read of
+ * mist blowing away from a pressurised jet.
  */
 public class WaterMistParticle extends TextureSheetParticle {
 
