@@ -1,0 +1,30 @@
+{
+	"type": "minecraft:crafting_shaped",
+	"category": "equipment",
+	"pattern": [
+		"GLG",
+		"RBR",
+		"SSS"
+	],
+	"key": {
+		"G": {
+			"item": "minecraft:gold_ingot"
+		},
+		"L": {
+			"item": "minecraft:lead"
+		},
+		"R": {
+			"item": "minecraft:redstone"
+		},
+		"B": {
+			"item": "minecraft:bucket"
+		},
+		"S": {
+			"item": "minecraft:smooth_stone"
+		}
+	},
+	"result": {
+		"id": "wildfireadditions:pump_box",
+		"count": 1
+	}
+}

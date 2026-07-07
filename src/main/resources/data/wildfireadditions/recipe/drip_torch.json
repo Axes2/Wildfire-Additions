@@ -1,0 +1,24 @@
+{
+	"type": "minecraft:crafting_shaped",
+	"category": "equipment",
+	"pattern": [
+		" F",
+		"IB",
+		"IB"
+	],
+	"key": {
+		"F": {
+			"item": "minecraft:flint_and_steel"
+		},
+		"I": {
+			"item": "minecraft:iron_ingot"
+		},
+		"B": {
+			"item": "minecraft:blaze_powder"
+		}
+	},
+	"result": {
+		"id": "wildfireadditions:drip_torch",
+		"count": 1
+	}
+}
