@@ -53,7 +53,7 @@ public class FireSprinklerBlockEntity extends BlockEntity {
     private static final int SCAN_RANGE = 30; // horizontal detection radius, in blocks
     private static final int VERTICAL_RANGE = 12; // vertical detection reach, in blocks
 
-    private static final int RETARGET_PERIOD = 10; // reacquire the closest fire twice a second, so the turret always tracks the nearest flame
+    private static final int RETARGET_PERIOD = 20; // reacquire the closest fire twice a second, so the turret always tracks the nearest flame
     private static final int SPRAY_PERIOD = 2; // run the spray/douse pass every 2 ticks, matching the hose
 
     private static final float YAW_STEP = 12.0f; // max degrees the head swivels per tick toward its target
