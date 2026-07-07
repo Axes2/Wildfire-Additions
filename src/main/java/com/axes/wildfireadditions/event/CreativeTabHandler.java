@@ -32,5 +32,7 @@ public final class CreativeTabHandler {
         event.accept(ModItems.HOSE);
         event.accept(ModItems.DRIP_TORCH);
         event.accept(ModItems.RETARDANT_SPRAYER);
+        event.accept(ModItems.FIRE_RETARDANT_BUCKET);
+        event.accept(ModItems.AIRCRAFT_TANK);
     }
 }

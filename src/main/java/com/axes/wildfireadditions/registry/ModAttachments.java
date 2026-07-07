@@ -1,6 +1,7 @@
 package com.axes.wildfireadditions.registry;
 
 import com.axes.wildfireadditions.WildfireAdditions;
+import com.axes.wildfireadditions.aircraft.AircraftTankData;
 import com.axes.wildfireadditions.coating.ChunkCoatingData;
 import net.neoforged.neoforge.attachment.AttachmentType;
 import net.neoforged.neoforge.registries.DeferredRegister;
@@ -29,5 +30,16 @@ public class ModAttachments {
             ATTACHMENT_TYPES.register("coating", () ->
                     AttachmentType.builder(ChunkCoatingData::new)
                             .serialize(ChunkCoatingData.CODEC)
+                            .build());
+
+    /**
+     * The water/retardant tank fitted to an aircraft. Hung on the aircraft <i>entity</i> and serialised so
+     * a fuelled tank survives the aircraft being unloaded or the world being saved. This is the crux of the
+     * soft dependency: we store our own state on Immersive Aircraft's entity without touching its code.
+     */
+    public static final Supplier<AttachmentType<AircraftTankData>> AIRCRAFT_TANK =
+            ATTACHMENT_TYPES.register("aircraft_tank", () ->
+                    AttachmentType.builder(() -> AircraftTankData.EMPTY)
+                            .serialize(AircraftTankData.CODEC)
                             .build());
 }
