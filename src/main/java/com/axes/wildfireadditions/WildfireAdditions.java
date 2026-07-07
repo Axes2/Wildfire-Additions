@@ -4,6 +4,7 @@ import com.axes.wildfireadditions.registry.ModAttachments;
 import com.axes.wildfireadditions.registry.ModBlockEntities;
 import com.axes.wildfireadditions.registry.ModBlocks;
 import com.axes.wildfireadditions.registry.ModItems;
+import com.axes.wildfireadditions.registry.ModParticles;
 import com.axes.wildfireadditions.registry.ModRecipes;
 import net.neoforged.bus.api.IEventBus;
 import net.neoforged.fml.common.Mod;
@@ -19,5 +20,6 @@ public class WildfireAdditions {
         ModBlockEntities.BLOCK_ENTITIES.register(modEventBus);
         ModAttachments.ATTACHMENT_TYPES.register(modEventBus);
         ModRecipes.RECIPE_SERIALIZERS.register(modEventBus);
+        ModParticles.PARTICLE_TYPES.register(modEventBus);
     }
 }

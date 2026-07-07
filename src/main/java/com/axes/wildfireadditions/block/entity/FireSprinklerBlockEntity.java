@@ -2,6 +2,7 @@ package com.axes.wildfireadditions.block.entity;
 
 import com.axes.wildfireadditions.block.FireSprinklerBlock;
 import com.axes.wildfireadditions.registry.ModBlockEntities;
+import com.axes.wildfireadditions.util.WaterDouseQueue;
 import com.axes.wildfireadditions.util.WaterStream;
 import dev.protomanly.pmweather.block.PMWFireBlock;
 import net.minecraft.core.BlockPos;
@@ -54,7 +55,7 @@ public class FireSprinklerBlockEntity extends BlockEntity {
     private static final int VERTICAL_RANGE = 12; // vertical detection reach, in blocks
 
     private static final int RETARGET_PERIOD = 20; // reacquire the closest fire twice a second, so the turret always tracks the nearest flame
-    private static final int SPRAY_PERIOD = 2; // run the spray/douse pass every 2 ticks, matching the hose
+    private static final int SPRAY_PERIOD = 2; // run the server trace/douse-scheduling pass every 2 ticks, matching the hose
 
     private static final float YAW_STEP = 12.0f; // max degrees the head swivels per tick toward its target
 
@@ -136,9 +137,12 @@ public class FireSprinklerBlockEntity extends BlockEntity {
 
         // Only douse if the arc can still actually reach the fire (nothing moved in to block it). The
         // douse happens at the fire block itself, not where the stream would eventually land - fire has
-        // no collision, so the stream passes through it and lands well beyond.
-        if (WaterStream.traceToTarget(level, origin, aim, STREAM_SPEED, MAX_RANGE, targetCenter, WaterStream.TARGET_TOLERANCE).reached()) {
-            WaterStream.extinguishAt(serverLevel, be.target, be.ticker);
+        // no collision, so the stream passes through it and lands well beyond. It's scheduled with the
+        // arc's flight time so the fire starts going out when the water physically arrives, in step
+        // with the visible droplets.
+        WaterStream.TargetTrace trace = WaterStream.traceToTarget(level, origin, aim, STREAM_SPEED, MAX_RANGE, targetCenter, WaterStream.TARGET_TOLERANCE);
+        if (trace.reached()) {
+            WaterDouseQueue.schedule(serverLevel, be.target, trace.flightTime());
         }
     }
 
@@ -156,19 +160,16 @@ public class FireSprinklerBlockEntity extends BlockEntity {
         }
 
         if (!state.getValue(FireSprinklerBlock.ACTIVE) || be.target == null) return;
-        be.ticker++;
-        if (be.ticker % SPRAY_PERIOD != 0) return;
 
         Vec3 origin = be.nozzleOrigin();
-        Vec3 targetCenter = Vec3.atCenterOf(be.target);
-        Vec3 aim = WaterStream.solveBallisticAim(origin, targetCenter, STREAM_SPEED);
+        Vec3 aim = WaterStream.solveBallisticAim(origin, Vec3.atCenterOf(be.target), STREAM_SPEED);
         if (aim == null) return;
 
-        // Draw the arc only as far as the fire (fire has no collision, so trace by proximity to it) and
-        // splash right on the fire, so the visible stream lands on the target instead of sailing past it.
-        WaterStream.TargetTrace trace = WaterStream.traceToTarget(level, origin, aim, STREAM_SPEED, MAX_RANGE, targetCenter, WaterStream.TARGET_TOLERANCE);
-        Vec3 impact = trace.reached() ? trace.endPosition() : null;
-        WaterStream.spawnTurretStream(level, origin, aim, STREAM_SPEED, trace.flightTime(), impact, be.ticker);
+        // Launch this tick's slug of water from the nozzle (every tick, so the jet is gapless). The
+        // droplets fly the same ballistic arc the aim solver computed, pass through the non-colliding
+        // flames they're aimed at and splash on the terrain at/behind the fire on their own - no trace
+        // or precomputed impact point needed here.
+        WaterStream.emitTurretStream(level, origin, aim, STREAM_SPEED);
     }
 
     // Scans a radius around the turret for fire blocks (PMWeather fire, plus vanilla fire as a fallback),
