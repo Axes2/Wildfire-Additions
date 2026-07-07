@@ -130,6 +130,13 @@ public class DripTorchFireHandler {
     private static final int CREEP_PERIOD = 20;
     private static final int CREEP_STEP = 1;
 
+    // The idle (no-fire) outward foliage clear advances far slower than the toward-fire creep: one ring
+    // roughly every NO_FIRE_SPREAD_PERIOD ticks (~4 seconds), i.e. about a quarter of the creep rate.
+    // At full creep speed the cleared diamond grew almost faster than a player could step out of it;
+    // this keeps the toward-a-wildfire creep brisk while making routine clearing a gentle crawl. Must be
+    // a whole multiple of CREEP_PERIOD, since the spread is only ever attempted on a creep pass.
+    private static final int NO_FIRE_SPREAD_PERIOD = CREEP_PERIOD * 4;
+
     // Max embers that attempt to creep per pass. The frontier is shuffled first (see creepTowardFire)
     // so this bound doesn't silently turn into "only the first N in iteration order ever advance" -
     // over several passes, every ember gets a fair shot, keeping the whole line advancing together
@@ -294,6 +301,11 @@ public class DripTorchFireHandler {
     private static void creepTowardFire(ServerLevel level, Map<BlockPos, Integer> set) {
         if (set.size() >= MAX_EMBERS) return;
 
+        // The idle outward clear runs on a slower cadence than the toward-fire creep (see
+        // NO_FIRE_SPREAD_PERIOD). Toward-fire steps still happen every pass; the no-fire ring is only
+        // pushed on the passes that line up with that slower period.
+        boolean idleSpreadDue = level.getGameTime() % NO_FIRE_SPREAD_PERIOD == 0;
+
         List<BlockPos> frontier = new ArrayList<>(set.keySet());
         Collections.shuffle(frontier);
         int attempts = 0;
@@ -319,7 +331,9 @@ public class DripTorchFireHandler {
 
             // No fire detectable at any range. Rather than sit and gutter out, clear a little ground:
             // push one ring outward if this ember still has budget, then mark it spent so it doesn't
-            // keep trying. Once the budget reaches zero the ember just burns out where it is.
+            // keep trying. Once the budget reaches zero the ember just burns out where it is. Only done
+            // on the slow idle cadence; off-cadence passes leave the budget untouched for the next one.
+            if (!idleSpreadDue) continue;
             Integer budget = set.get(ember);
             if (budget == null || budget <= 0) continue;
             attempts++;
