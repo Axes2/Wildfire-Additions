@@ -17,7 +17,7 @@ import net.minecraft.world.level.Level;
 import net.minecraft.world.level.levelgen.Heightmap;
 import net.minecraft.world.phys.Vec3;
 
-public class DripTorchItem extends Item {
+public class DripTorchItem extends Item implements ReducedUseSlowdownItem {
 
     private static final double IGNITE_DISTANCE = 2.5; // Blocks in front of the player the ground lights.
     private static final int IGNITE_INTERVAL = 6; // Ticks between ground ignitions while held.

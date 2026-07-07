@@ -12,7 +12,7 @@ import net.minecraft.world.item.UseAnim;
 import net.minecraft.world.level.Level;
 import net.minecraft.world.phys.Vec3;
 
-public class HoseItem extends Item {
+public class HoseItem extends Item implements ReducedUseSlowdownItem {
 
     // A handheld line: modest nozzle speed and reach. A level shot from head height reaches roughly
     // 10-12 blocks, a shot angled slightly up reaches close to the ~20 block cap, and firing from up
