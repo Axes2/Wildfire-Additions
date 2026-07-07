@@ -32,7 +32,7 @@ public class FireSprinklerRenderer implements BlockEntityRenderer<FireSprinklerB
 
     // The head is drawn with flat lighting (no ambient occlusion) so it reads a touch brighter/flatter
     // than the chunk-baked base. Knock the colour down a bit so it blends in instead of standing out.
-    private static final float SHADE = 0.72f;
+    private static final float SHADE = 0.3f;
 
     private final BlockRenderDispatcher blockRenderer;
 
