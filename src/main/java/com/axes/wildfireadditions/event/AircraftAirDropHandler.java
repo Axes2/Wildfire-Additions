@@ -5,6 +5,8 @@ import com.axes.wildfireadditions.aircraft.AircraftTankData.Fluid;
 import com.axes.wildfireadditions.coating.RetardantCoating;
 import com.axes.wildfireadditions.item.RetardantSprayerItem;
 import dev.protomanly.pmweather.block.PMWFireBlock;
+import it.unimi.dsi.fastutil.longs.LongOpenHashSet;
+import it.unimi.dsi.fastutil.longs.LongSet;
 import net.minecraft.core.BlockPos;
 import net.minecraft.core.particles.DustParticleOptions;
 import net.minecraft.core.particles.ParticleOptions;
@@ -13,6 +15,7 @@ import net.minecraft.resources.ResourceKey;
 import net.minecraft.server.level.ServerLevel;
 import net.minecraft.sounds.SoundEvents;
 import net.minecraft.sounds.SoundSource;
+import net.minecraft.util.RandomSource;
 import net.minecraft.world.level.Level;
 import net.minecraft.world.level.block.Blocks;
 import net.minecraft.world.level.block.state.BlockState;
@@ -27,9 +30,9 @@ import java.util.Iterator;
 import java.util.List;
 
 /**
- * Turns a tank deploy into a slow cloud of coloured particles that sinks toward the ground and, as it
- * arrives, applies the payload's effect column by column - so the effect visibly "lands" with the cloud
- * rather than snapping into place the instant the key is pressed.
+ * Turns a tank deploy into a long, slow-sinking curtain of coloured particles that is laid down as a
+ * <b>stripe along the aircraft's flight path</b> (not a circular splat) and applies its effect column by
+ * column as it settles - so the payload reads as a proper aerial drop trailing behind the plane.
  *
  * <p>Both payloads reuse machinery that already exists for the hand tools, which is the whole reason the
  * plane feature is small:
@@ -46,17 +49,23 @@ import java.util.List;
 @EventBusSubscriber(modid = WildfireAdditions.MODID)
 public final class AircraftAirDropHandler {
 
-    /** Horizontal radius of the drop footprint, in blocks. */
-    private static final int RADIUS = 3;
-    /** How fast the cloud sinks, in blocks per tick. */
-    private static final double FALL_SPEED = 0.6;
-    /** How far down we scan for fire/ground, and the most the cloud will fall before dissipating. */
-    private static final int MAX_DROP = 48;
+    /** Length of the drop stripe along the flight path, in blocks. */
+    private static final int STRIPE_LENGTH = 32;
+    /** Half-width of the stripe (perpendicular to the path); 1 gives a 3-block-wide swath. */
+    private static final int STRIPE_HALF_WIDTH = 1;
+    /** How fast the curtain sinks, in blocks per tick - deliberately slow so the fall is clearly visible. */
+    private static final double FALL_SPEED = 0.35;
+    /** How far down we scan for fire/ground, and the most the curtain will fall before dissipating. */
+    private static final int MAX_DROP = 60;
     /** One-shot intensity cut a water drop inflicts on any fire it settles on (INTENSITY runs 1-10). */
     private static final int WATER_INTENSITY_STEP = 8;
 
-    private static final Vector3f BLUE = new Vector3f(0.25f, 0.55f, 1.0f);
-    private static final Vector3f RED = new Vector3f(0.85f, 0.15f, 0.12f);
+    /** How many particle clusters to scatter along the whole stripe each tick as it falls. */
+    private static final int FALL_CLUSTERS_PER_TICK = 34;
+
+    private static final Vector3f BLUE = new Vector3f(0.20f, 0.52f, 1.0f);
+    private static final Vector3f RED = new Vector3f(0.90f, 0.13f, 0.10f);
+    private static final Vector3f WHITE = new Vector3f(0.95f, 0.97f, 1.0f);
 
     // Live drops across all dimensions; each tick we process the ones matching the ticking level.
     private static final List<ActiveDrop> DROPS = new ArrayList<>();
@@ -65,32 +74,46 @@ public final class AircraftAirDropHandler {
     }
 
     /**
-     * Begins a drop of {@code fluid} centred on ({@code x},{@code z}) starting at height {@code y} (the
-     * aircraft's altitude). Called from the network handler once a deploy is validated server-side.
+     * Begins a drop of {@code fluid} laid out as a stripe centred on ({@code x},{@code z}) at height
+     * {@code y} (the aircraft's altitude), running along the horizontal heading ({@code dirX},{@code dirZ}).
+     * Called from the network handler once a deploy is validated server-side.
      */
-    public static void startDrop(ServerLevel level, double x, double y, double z, Fluid fluid) {
+    public static void startDrop(ServerLevel level, double x, double y, double z,
+                                 double dirX, double dirZ, Fluid fluid) {
         if (fluid == Fluid.NONE) return;
 
-        int startY = (int) Math.floor(y);
-        int cx = (int) Math.floor(x);
-        int cz = (int) Math.floor(z);
+        // Normalise the heading; fall back to +Z if the aircraft is somehow stationary and unrotated.
+        double len = Math.sqrt(dirX * dirX + dirZ * dirZ);
+        if (len < 1.0e-4) {
+            dirX = 0;
+            dirZ = 1;
+        } else {
+            dirX /= len;
+            dirZ /= len;
+        }
+        double perpX = -dirZ;
+        double perpZ = dirX;
 
+        int startY = (int) Math.floor(y);
         List<Column> columns = new ArrayList<>();
+        LongSet seen = new LongOpenHashSet();
         BlockPos.MutableBlockPos cursor = new BlockPos.MutableBlockPos();
-        for (int dx = -RADIUS; dx <= RADIUS; dx++) {
-            for (int dz = -RADIUS; dz <= RADIUS; dz++) {
-                if (dx * dx + dz * dz > RADIUS * RADIUS + 1) continue; // trim the square to a rough disc
-                columns.add(scanColumn(level, cx + dx, cz + dz, startY, cursor));
+        for (int i = -STRIPE_LENGTH / 2; i <= STRIPE_LENGTH / 2; i++) {
+            for (int w = -STRIPE_HALF_WIDTH; w <= STRIPE_HALF_WIDTH; w++) {
+                int bx = (int) Math.floor(x + dirX * i + perpX * w);
+                int bz = (int) Math.floor(z + dirZ * i + perpZ * w);
+                if (seen.add(packXZ(bx, bz))) {
+                    columns.add(scanColumn(level, bx, bz, startY, cursor));
+                }
             }
         }
 
         DROPS.add(new ActiveDrop(level.dimension(), fluid, columns, y, y - MAX_DROP));
 
-        // An opening puff at the aircraft so the release reads immediately, before the cloud has fallen.
-        ParticleOptions dust = dust(fluid);
-        level.sendParticles(dust, x, y - 0.3, z, 40, RADIUS * 0.7, 0.3, RADIUS * 0.7, 0.0);
-        level.playSound(null, cx, startY, cz, SoundEvents.PLAYER_SPLASH, SoundSource.PLAYERS,
-                0.7f, 0.7f + level.random.nextFloat() * 0.2f);
+        // A dense opening burst all along the stripe so the release reads immediately, up at plane height.
+        emitFallingCurtain(level, columns, y, fluid, Math.min(columns.size(), 50), 4);
+        level.playSound(null, BlockPos.containing(x, startY, z), SoundEvents.PLAYER_SPLASH, SoundSource.PLAYERS,
+                0.9f, 0.7f + level.random.nextFloat() * 0.2f);
     }
 
     // Finds the highest fire block and the highest coatable ground block in this column, scanning down
@@ -138,21 +161,18 @@ public final class AircraftAirDropHandler {
         }
     }
 
-    // Advances one drop by a tick: sinks the cloud, paints a fresh particle layer, and fires each column's
-    // effect as the cloud reaches it. Returns true once the drop is spent (all columns done or fully sunk).
+    // Advances one drop by a tick: sinks the curtain, paints a fresh dense particle layer all along the
+    // stripe, and fires each column's effect as the curtain reaches it. Returns true once the drop is spent.
     private static boolean tickDrop(ServerLevel level, ActiveDrop drop) {
         drop.y -= FALL_SPEED;
-
-        double cx = drop.centerX();
-        double cz = drop.centerZ();
-        level.sendParticles(dust(drop.fluid), cx, drop.y, cz, 14, RADIUS * 0.6, 0.15, RADIUS * 0.6, 0.0);
+        emitFallingCurtain(level, drop.columns, drop.y, drop.fluid, FALL_CLUSTERS_PER_TICK, 3);
 
         boolean allApplied = true;
         for (Column column : drop.columns) {
             if (column.applied) continue;
             int target = drop.fluid == Fluid.WATER ? column.effectTargetWater() : column.groundY;
             if (target == Column.NO_HIT) {
-                // Nothing to act on in this column; retire it once the cloud has sunk past where it would be.
+                // Nothing to act on in this column; retire it once the curtain has sunk past where it would be.
                 if (drop.y <= drop.stopY + 1) column.applied = true;
                 else allApplied = false;
                 continue;
@@ -168,16 +188,39 @@ public final class AircraftAirDropHandler {
         return allApplied || drop.y <= drop.stopY;
     }
 
-    private static void applyColumn(ServerLevel level, Fluid fluid, Column column) {
-        if (fluid == Fluid.WATER) {
-            applyWater(level, column.x, column.fireY, column.z);
-        } else {
-            applyRetardant(level, column.x, column.groundY, column.z);
+    // Scatters `clusters` particle clusters at random points along the stripe at height `y`: a heavy dose of
+    // the fluid's colour plus a thread of bright white so the falling curtain stands out against any terrain.
+    private static void emitFallingCurtain(ServerLevel level, List<Column> columns, double y, Fluid fluid,
+                                           int clusters, int coloredPerCluster) {
+        int n = columns.size();
+        if (n == 0) return;
+        RandomSource rng = level.random;
+        ParticleOptions colored = dust(fluid);
+        for (int c = 0; c < clusters; c++) {
+            Column col = columns.get(rng.nextInt(n));
+            double px = col.x + rng.nextDouble();
+            double pz = col.z + rng.nextDouble();
+            double py = y + (rng.nextDouble() - 0.5) * 2.0;
+            level.sendParticles(colored, px, py, pz, coloredPerCluster, 0.25, 0.35, 0.25, 0.0);
+            if (rng.nextInt(2) == 0) {
+                level.sendParticles(WHITE_DUST, px, py, pz, 2, 0.2, 0.3, 0.2, 0.0);
+            }
         }
     }
 
-    // A hard, one-shot dousing over a small volume around the fire the cloud settled on.
-    private static void applyWater(ServerLevel level, int x, int fireY, int z) {
+    private static void applyColumn(ServerLevel level, Fluid fluid, Column column) {
+        // Only a fraction of the (many) columns spawn a heavy impact burst, so a long stripe still lands as
+        // one big visible wall of effect without flooding the network with per-block particle packets.
+        boolean showImpact = level.random.nextInt(2) == 0;
+        if (fluid == Fluid.WATER) {
+            applyWater(level, column.x, column.fireY, column.z, showImpact);
+        } else {
+            applyRetardant(level, column.x, column.groundY, column.z, showImpact);
+        }
+    }
+
+    // A hard, one-shot dousing over a small volume around the fire the curtain settled on.
+    private static void applyWater(ServerLevel level, int x, int fireY, int z, boolean showImpact) {
         if (fireY == Column.NO_HIT) return;
         BlockPos.MutableBlockPos pos = new BlockPos.MutableBlockPos();
         boolean doused = false;
@@ -202,34 +245,42 @@ public final class AircraftAirDropHandler {
                 }
             }
         }
+        if (!showImpact) return;
         double px = x + 0.5, py = fireY + 0.5, pz = z + 0.5;
-        level.sendParticles(ParticleTypes.CLOUD, px, py, pz, 12, 0.4, 0.3, 0.4, 0.02);
-        level.sendParticles(ParticleTypes.LARGE_SMOKE, px, py, pz, 3, 0.3, 0.2, 0.3, 0.01);
-        if (doused) {
+        level.sendParticles(ParticleTypes.CLOUD, px, py, pz, 18, 0.55, 0.45, 0.55, 0.03);
+        level.sendParticles(ParticleTypes.LARGE_SMOKE, px, py, pz, 6, 0.4, 0.3, 0.4, 0.02);
+        level.sendParticles(dust(Fluid.WATER), px, py + 0.3, pz, 6, 0.5, 0.4, 0.5, 0.0);
+        if (doused && level.random.nextInt(6) == 0) {
             level.playSound(null, BlockPos.containing(px, py, pz), SoundEvents.FIRE_EXTINGUISH, SoundSource.BLOCKS,
-                    0.6f, 1.0f + level.random.nextFloat() * 0.2f);
+                    0.7f, 1.0f + level.random.nextFloat() * 0.2f);
         }
     }
 
-    // Lays a retardant note on the ground the cloud settled over plus its four horizontal neighbours,
-    // exactly the note the Retardant Sprayer paints - the fire mixin does the rest.
-    private static void applyRetardant(ServerLevel level, int x, int groundY, int z) {
+    // Lays a retardant note on the ground the curtain settled over, exactly the note the Retardant Sprayer
+    // paints - the fire mixin does the rest - then throws up a low puff of settling dust.
+    private static void applyRetardant(ServerLevel level, int x, int groundY, int z, boolean showImpact) {
         if (groundY == Column.NO_HIT) return;
         BlockPos.MutableBlockPos pos = new BlockPos.MutableBlockPos();
-        int[][] offsets = {{0, 0}, {1, 0}, {-1, 0}, {0, 1}, {0, -1}};
-        for (int[] o : offsets) {
-            pos.set(x + o[0], groundY, z + o[1]);
-            BlockState state = level.getBlockState(pos);
-            if (RetardantSprayerItem.isCoatable(level, pos, state) && !RetardantCoating.isCoated(level, pos)) {
-                RetardantCoating.coat(level, pos.immutable());
-            }
+        pos.set(x, groundY, z);
+        BlockState state = level.getBlockState(pos);
+        if (RetardantSprayerItem.isCoatable(level, pos, state) && !RetardantCoating.isCoated(level, pos)) {
+            RetardantCoating.coat(level, pos.immutable());
         }
+        if (!showImpact) return;
         double px = x + 0.5, py = groundY + 1.0, pz = z + 0.5;
-        level.sendParticles(ParticleTypes.CLOUD, px, py, pz, 5, 0.4, 0.1, 0.4, 0.01);
+        level.sendParticles(dust(Fluid.RETARDANT), px, py, pz, 8, 0.5, 0.25, 0.5, 0.0);
+        level.sendParticles(WHITE_DUST, px, py, pz, 3, 0.5, 0.2, 0.5, 0.0);
+        level.sendParticles(ParticleTypes.CLOUD, px, py, pz, 5, 0.45, 0.15, 0.45, 0.01);
     }
 
+    private static final DustParticleOptions WHITE_DUST = new DustParticleOptions(WHITE, 1.3f);
+
     private static ParticleOptions dust(Fluid fluid) {
-        return new DustParticleOptions(fluid == Fluid.WATER ? BLUE : RED, 1.6f);
+        return new DustParticleOptions(fluid == Fluid.WATER ? BLUE : RED, 2.0f);
+    }
+
+    private static long packXZ(int x, int z) {
+        return (x & 0xFFFFFFFFL) | ((long) z << 32);
     }
 
     // --- drop bookkeeping --------------------------------------------------------------------------
@@ -247,14 +298,6 @@ public final class AircraftAirDropHandler {
             this.columns = columns;
             this.y = startY;
             this.stopY = stopY;
-        }
-
-        double centerX() {
-            return columns.isEmpty() ? 0 : columns.get(columns.size() / 2).x + 0.5;
-        }
-
-        double centerZ() {
-            return columns.isEmpty() ? 0 : columns.get(columns.size() / 2).z + 0.5;
         }
     }
 

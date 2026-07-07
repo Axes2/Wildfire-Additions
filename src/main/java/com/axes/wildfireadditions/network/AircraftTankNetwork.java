@@ -44,8 +44,19 @@ public final class AircraftTankNetwork {
             AircraftTankData.Fluid fluid = tank.fluid();
             aircraft.setData(ModAttachments.AIRCRAFT_TANK.get(), tank.withOneSpent());
 
+            // Lay the stripe along the aircraft's travel direction, falling back to its facing when it's
+            // hovering (e.g. a stationary helicopter) so the drop still has a sensible orientation.
+            var move = aircraft.getDeltaMovement();
+            double dirX = move.x;
+            double dirZ = move.z;
+            if (dirX * dirX + dirZ * dirZ < 1.0e-3) {
+                double yaw = Math.toRadians(aircraft.getYRot());
+                dirX = -Math.sin(yaw);
+                dirZ = Math.cos(yaw);
+            }
+
             AircraftAirDropHandler.startDrop((ServerLevel) player.level(),
-                    aircraft.getX(), aircraft.getY(), aircraft.getZ(), fluid);
+                    aircraft.getX(), aircraft.getY(), aircraft.getZ(), dirX, dirZ, fluid);
         });
     }
 }
