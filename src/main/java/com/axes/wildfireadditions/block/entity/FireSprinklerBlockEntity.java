@@ -43,15 +43,16 @@ import java.util.Objects;
 public class FireSprinklerBlockEntity extends BlockEntity {
 
     // A fixed high-pressure monitor: faster and longer-reaching than the handheld hose so it can service
-    // its full detection radius. Ballistic range on flat ground is v^2/g = 30^2/16 ~= 56 blocks, so a
-    // target anywhere in the 30-block scan is comfortably reachable.
-    private static final double STREAM_SPEED = 30.0;
-    private static final double MAX_RANGE = 40.0; // straight-line dissipation distance for the stream
+    // its full detection radius. The nozzle throws with a pronounced arc; ballistic range on flat ground
+    // is v^2/g = 21^2/16 ~= 27.5 blocks, so the detection radius is kept just inside that (SCAN_RANGE)
+    // to make sure every fire it targets is actually reachable.
+    private static final double STREAM_SPEED = 21.0;
+    private static final double MAX_RANGE = 30.0; // straight-line dissipation distance for the stream
 
     // The nozzle sits at the centre of the head, 24px (1.5 blocks) up from the bottom of the model.
     private static final double NOZZLE_HEIGHT = 24.0 / 16.0;
 
-    private static final int SCAN_RANGE = 30; // horizontal detection radius, in blocks
+    private static final int SCAN_RANGE = 26; // horizontal detection radius, in blocks (inside ballistic reach)
     private static final int VERTICAL_RANGE = 12; // vertical detection reach, in blocks
 
     private static final int RETARGET_PERIOD = 20; // reacquire the closest fire twice a second, so the turret always tracks the nearest flame

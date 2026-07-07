@@ -33,10 +33,10 @@ import net.minecraft.util.Mth;
  * wind speed). Left unchecked that drags the droplets off the ballistic arc the server actually douses
  * along, so the water visibly misses the fire it's putting out. To fix the disconnect, a coherent
  * droplet keeps its own authoritative velocity and re-asserts it at the top of every tick, discarding
- * whatever the wind pass did to it - so most of the stream flies its true arc and lands on the fire. A
- * small random fraction ({@link #WIND_CAUGHT_CHANCE}) instead leaves its velocity alone, letting the
- * wind sweep it away as spray peeling off the jet (the white mist layer is likewise left wind-driven).
- * When PMWeather isn't present the re-assert is simply a harmless no-op.
+ * whatever the wind pass did to it - so the stream flies its true arc and lands on the fire. A
+ * configurable fraction ({@link #WIND_CAUGHT_CHANCE}, currently 0) can instead be left to the wind to
+ * peel off as spray; with it disabled, only the white mist layer is windblown. When PMWeather isn't
+ * present the re-assert is simply a harmless no-op.
  */
 public class WaterJetParticle extends TextureSheetParticle {
 
@@ -54,7 +54,9 @@ public class WaterJetParticle extends TextureSheetParticle {
     private static final float GROWTH = 0.55f; // fractional quad growth over a full lifetime
 
     // Fraction of jet droplets that let the wind carry them off as spray instead of holding their arc.
-    private static final float WIND_CAUGHT_CHANCE = 0.14f;
+    // Currently 0: the blue jet fully resists wind (reads as a solid, high-pressure stream) and only the
+    // white mist layer is left windblown. Bump this above 0 to also have some droplets peel off downwind.
+    private static final float WIND_CAUGHT_CHANCE = 0.0f;
 
     // Per-droplet colour identity: how long it stays white and which blue it clears into.
     private final int whiteTicks;

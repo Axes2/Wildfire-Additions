@@ -143,13 +143,13 @@ public final class WaterStream {
     // The handheld line: a solid cinematic stream.
     private static final int HOSE_SUBSTEPS = 5; // sub-tick emission points per tick
     private static final int HOSE_DROPLETS_PER_STEP = 3; // droplets at each emission point
-    private static final double HOSE_ANGLE_JITTER = 0.022; // ~1.3 degrees of nozzle spread
+    private static final double HOSE_ANGLE_JITTER = 0.036; // ~2 degrees of nozzle spread, for a wider fan
     private static final int HOSE_NOZZLE_MIST = 2; // white pressure-mist wisps per tick at the nozzle
 
     // The sprinkler monitor: faster, denser and mistier, so it reads as high pressure next to the hose.
     private static final int TURRET_SUBSTEPS = 6;
     private static final int TURRET_DROPLETS_PER_STEP = 4;
-    private static final double TURRET_ANGLE_JITTER = 0.016; // tighter jet than the handheld line
+    private static final double TURRET_ANGLE_JITTER = 0.026; // still a touch tighter than the handheld line
     private static final int TURRET_NOZZLE_MIST = 3;
 
     public static void emitHoseStream(Level level, Vec3 origin, Vec3 direction, double speed) {

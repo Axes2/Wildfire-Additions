@@ -21,12 +21,13 @@ import net.minecraft.world.phys.Vec3;
 
 public class HoseItem extends Item implements ReducedUseSlowdownItem {
 
-    // A handheld line: modest nozzle speed and reach. A level shot from head height reaches roughly
-    // 10-12 blocks, a shot angled slightly up reaches close to the ~20 block cap, and firing from up
-    // high extends it further - all emergent from simulating the arc (see WaterStream) rather than a
-    // straight ray. The placed sprinkler turret uses the same simulation but a higher-pressure nozzle.
-    private static final double STREAM_SPEED = 22.0; // blocks/second, nozzle exit speed
-    private static final double MAX_RANGE = 20.0; // straight-line distance from the nozzle before the stream dissipates
+    // A handheld line: modest nozzle speed and reach. A gentle exit speed gives the stream a pronounced
+    // arc - a level shot from head height reaches roughly 7-8 blocks, a shot angled up reaches the ~15
+    // block ballistic max, and firing from up high extends it further - all emergent from simulating the
+    // arc (see WaterStream) rather than a straight ray. The placed sprinkler turret uses the same
+    // simulation but a higher-pressure nozzle.
+    private static final double STREAM_SPEED = 15.4; // blocks/second, nozzle exit speed
+    private static final double MAX_RANGE = 16.0; // straight-line distance from the nozzle before the stream dissipates
 
     private static final int SERVER_TICK_INTERVAL = 2; // how often the server-side trace/douse pass runs
 
