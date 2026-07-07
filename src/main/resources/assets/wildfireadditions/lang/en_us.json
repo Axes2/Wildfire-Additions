@@ -5,10 +5,19 @@
 	"item.wildfireadditions.drip_torch": "Drip Torch",
 	"item.wildfireadditions.retardant_sprayer": "Retardant Sprayer",
 	"item.wildfireadditions.fire_retardant_bucket": "Fire Retardant Bucket",
-	"item.wildfireadditions.fire_retardant_bucket.desc": "Loads an aircraft tank with retardant",
+	"item.wildfireadditions.fire_retardant_bucket.desc": "Load into an aircraft's cargo to drop retardant",
 	"item.wildfireadditions.aircraft_tank": "Aircraft Tank",
-	"item.wildfireadditions.aircraft_tank.desc": "Right-click an aircraft to fit it, then load with 3 water or retardant buckets",
-	"item.wildfireadditions.aircraft_tank.desc2": "While flying, press Deploy Aircraft Tank to drop the payload",
+	"item.wildfireadditions.aircraft_tank.desc": "Right-click an aircraft to fit it; load water or retardant buckets into the aircraft's cargo",
+	"item.wildfireadditions.aircraft_tank.desc2": "While flying, press Deploy Aircraft Tank to drop; Switch Tank Fluid to change payload",
 	"key.categories.wildfireadditions": "Wildfire Additions",
-	"key.wildfireadditions.deploy_tank": "Deploy Aircraft Tank"
+	"key.wildfireadditions.deploy_tank": "Deploy Aircraft Tank",
+	"key.wildfireadditions.switch_tank_fluid": "Switch Tank Fluid",
+	"message.wildfireadditions.fluid.water": "Water",
+	"message.wildfireadditions.fluid.retardant": "Fire Retardant",
+	"message.wildfireadditions.tank_installed": "Aircraft equipped for firefighting — drawing %s",
+	"message.wildfireadditions.tank_removed": "Firefighting tank removed",
+	"message.wildfireadditions.tank_switched": "Tank now drawing %s",
+	"message.wildfireadditions.no_tank": "This aircraft has no firefighting tank",
+	"message.wildfireadditions.no_cargo": "This aircraft has no cargo to draw from",
+	"message.wildfireadditions.out_of_fluid": "No %s buckets in the aircraft's cargo"
 }

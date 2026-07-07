@@ -3,6 +3,7 @@ package com.axes.wildfireadditions.client;
 import com.axes.wildfireadditions.WildfireAdditions;
 import com.axes.wildfireadditions.compat.ImmersiveAircraftCompat;
 import com.axes.wildfireadditions.network.DeployTankPayload;
+import com.axes.wildfireadditions.network.SwitchTankFluidPayload;
 import net.minecraft.client.Minecraft;
 import net.neoforged.api.distmarker.Dist;
 import net.neoforged.bus.api.SubscribeEvent;
@@ -27,9 +28,16 @@ public final class AircraftTankClientEvents {
         Minecraft mc = Minecraft.getInstance();
         if (mc.player == null || mc.level == null) return;
 
+        boolean riding = ImmersiveAircraftCompat.isAircraft(mc.player.getVehicle());
+
         while (ModKeyMappings.DEPLOY_TANK.consumeClick()) {
-            if (ImmersiveAircraftCompat.isAircraft(mc.player.getVehicle())) {
+            if (riding) {
                 PacketDistributor.sendToServer(DeployTankPayload.INSTANCE);
+            }
+        }
+        while (ModKeyMappings.SWITCH_TANK_FLUID.consumeClick()) {
+            if (riding) {
+                PacketDistributor.sendToServer(SwitchTankFluidPayload.INSTANCE);
             }
         }
     }

@@ -24,11 +24,18 @@ public final class ModKeyMappings {
             InputConstants.UNKNOWN.getValue(), // unbound until the player assigns one
             CATEGORY);
 
+    public static final KeyMapping SWITCH_TANK_FLUID = new KeyMapping(
+            "key.wildfireadditions.switch_tank_fluid",
+            InputConstants.Type.KEYSYM,
+            InputConstants.UNKNOWN.getValue(), // unbound until the player assigns one
+            CATEGORY);
+
     private ModKeyMappings() {
     }
 
     @SubscribeEvent
     public static void register(RegisterKeyMappingsEvent event) {
         event.register(DEPLOY_TANK);
+        event.register(SWITCH_TANK_FLUID);
     }
 }

@@ -4,73 +4,64 @@ import com.mojang.serialization.Codec;
 import com.mojang.serialization.codecs.RecordCodecBuilder;
 
 /**
- * The state of the water/retardant tank bolted onto an aircraft, stored as a serialised data attachment
- * on the aircraft entity itself (see {@link com.axes.wildfireadditions.registry.ModAttachments#AIRCRAFT_TANK}).
- * Keeping it on the entity - rather than reaching into Immersive Aircraft's own inventory - is what lets
- * this be a genuine <i>soft</i> dependency: we never touch an IA class, we just hang our own note on the
- * vehicle and detect that the vehicle happens to be an aircraft by its registry namespace.
+ * The state of the firefighting tank fitted to an aircraft, stored as a serialised data attachment on the
+ * aircraft entity itself (see {@link com.axes.wildfireadditions.registry.ModAttachments#AIRCRAFT_TANK}).
+ * Keeping it on the entity - rather than reaching into Immersive Aircraft's own code - is what lets this be
+ * a genuine <i>soft</i> dependency: we never touch an IA class, we just hang our own note on the vehicle.
  *
- * <p>The tank is deliberately single-fluid: it holds up to {@link #MAX_CHARGES} loads of exactly one of
- * water or retardant, and can't be topped up with the other until it's been emptied back to
- * {@link Fluid#NONE}. Each deploy spends one charge.
+ * <p>The tank no longer stores fluid itself. It draws buckets straight from the aircraft's cargo
+ * ({@code net.minecraft.world.Container}, which every IA aircraft implements) when a drop is fired, so a
+ * plane's payload capacity is simply however many water / retardant buckets the player has loaded into it.
+ * All this attachment records is whether a tank is fitted at all and which of the two fluids it's currently
+ * set to draw.
  */
-public record AircraftTankData(boolean installed, Fluid fluid, int charges) {
-
-    /** How many bucket-loads a full tank holds; also how many buckets it takes to fill from empty. */
-    public static final int MAX_CHARGES = 3;
+public record AircraftTankData(boolean installed, Fluid selectedFluid) {
 
     /** The default, and the state of a vehicle that has never had a tank fitted. */
-    public static final AircraftTankData EMPTY = new AircraftTankData(false, Fluid.NONE, 0);
+    public static final AircraftTankData EMPTY = new AircraftTankData(false, Fluid.WATER);
 
     public static final Codec<AircraftTankData> CODEC = RecordCodecBuilder.create(instance -> instance.group(
             Codec.BOOL.fieldOf("installed").forGetter(AircraftTankData::installed),
-            Fluid.CODEC.fieldOf("fluid").forGetter(AircraftTankData::fluid),
-            Codec.INT.fieldOf("charges").forGetter(AircraftTankData::charges)
+            Fluid.CODEC.fieldOf("selectedFluid").forGetter(AircraftTankData::selectedFluid)
     ).apply(instance, AircraftTankData::new));
 
-    /** A freshly fitted, empty tank. Named to avoid clashing with the record's {@code installed()} accessor. */
+    /** A freshly fitted tank, defaulting to drawing water. */
     public static AircraftTankData fitted() {
-        return new AircraftTankData(true, Fluid.NONE, 0);
+        return new AircraftTankData(true, Fluid.WATER);
     }
 
-    public boolean isEmpty() {
-        return charges <= 0;
+    public AircraftTankData withFluid(Fluid fluid) {
+        return new AircraftTankData(installed, fluid);
     }
 
-    public boolean isFull() {
-        return charges >= MAX_CHARGES;
+    /** This tank flipped to the other fluid. */
+    public AircraftTankData toggledFluid() {
+        return withFluid(selectedFluid == Fluid.WATER ? Fluid.RETARDANT : Fluid.WATER);
     }
 
-    /** Whether this tank will accept another bucket of {@code incoming}: room left, and same/blank fluid. */
-    public boolean canAccept(Fluid incoming) {
-        return installed && !isFull() && (fluid == Fluid.NONE || fluid == incoming);
-    }
-
-    /** This tank with one more charge of {@code incoming}. Caller must have checked {@link #canAccept}. */
-    public AircraftTankData withAdded(Fluid incoming) {
-        return new AircraftTankData(true, incoming, charges + 1);
-    }
-
-    /** This tank with one charge spent; resets to {@link Fluid#NONE} once it runs dry so it can be refilled with either fluid. */
-    public AircraftTankData withOneSpent() {
-        int left = Math.max(0, charges - 1);
-        return new AircraftTankData(true, left == 0 ? Fluid.NONE : fluid, left);
-    }
-
-    /** What the tank drops. {@link #NONE} is the "no fluid loaded" placeholder, never actually deployed. */
+    /** What the tank drops. */
     public enum Fluid {
-        NONE,
-        WATER,
-        RETARDANT;
+        WATER("message.wildfireadditions.fluid.water"),
+        RETARDANT("message.wildfireadditions.fluid.retardant");
 
         public static final Codec<Fluid> CODEC = Codec.STRING.xmap(
                 name -> {
                     try {
                         return Fluid.valueOf(name);
                     } catch (IllegalArgumentException e) {
-                        return NONE;
+                        return WATER;
                     }
                 },
                 Fluid::name);
+
+        private final String translationKey;
+
+        Fluid(String translationKey) {
+            this.translationKey = translationKey;
+        }
+
+        public String translationKey() {
+            return translationKey;
+        }
     }
 }

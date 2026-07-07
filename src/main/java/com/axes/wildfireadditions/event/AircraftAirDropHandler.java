@@ -13,6 +13,7 @@ import net.minecraft.core.particles.ParticleOptions;
 import net.minecraft.core.particles.ParticleTypes;
 import net.minecraft.resources.ResourceKey;
 import net.minecraft.server.level.ServerLevel;
+import net.minecraft.server.level.ServerPlayer;
 import net.minecraft.sounds.SoundEvents;
 import net.minecraft.sounds.SoundSource;
 import net.minecraft.util.RandomSource;
@@ -90,7 +91,6 @@ public final class AircraftAirDropHandler {
      * deploy is validated server-side.
      */
     public static void startDrop(ServerLevel level, Entity aircraft, Fluid fluid) {
-        if (fluid == Fluid.NONE) return;
         DROPS.add(new ActiveDrop(level.dimension(), fluid, aircraft));
         level.playSound(null, aircraft.blockPosition(), SoundEvents.PLAYER_SPLASH, SoundSource.PLAYERS,
                 0.9f, 0.7f + level.random.nextFloat() * 0.2f);
@@ -223,9 +223,9 @@ public final class AircraftAirDropHandler {
             double px = puff.x + rng.nextDouble();
             double pz = puff.z + rng.nextDouble();
             double py = puff.y + (rng.nextDouble() - 0.5) * 1.5;
-            level.sendParticles(colored, px, py, pz, 3, 0.25, 0.35, 0.25, 0.0);
+            farParticles(level, colored, px, py, pz, 3, 0.25, 0.35, 0.25, 0.0);
             if (rng.nextInt(2) == 0) {
-                level.sendParticles(WHITE_DUST, px, py, pz, 2, 0.2, 0.3, 0.2, 0.0);
+                farParticles(level, WHITE_DUST, px, py, pz, 2, 0.2, 0.3, 0.2, 0.0);
             }
         }
     }
@@ -269,9 +269,9 @@ public final class AircraftAirDropHandler {
         }
         if (!showImpact) return;
         double px = x + 0.5, py = fireY + 0.5, pz = z + 0.5;
-        level.sendParticles(ParticleTypes.CLOUD, px, py, pz, 18, 0.55, 0.45, 0.55, 0.03);
-        level.sendParticles(ParticleTypes.LARGE_SMOKE, px, py, pz, 6, 0.4, 0.3, 0.4, 0.02);
-        level.sendParticles(dust(Fluid.WATER), px, py + 0.3, pz, 6, 0.5, 0.4, 0.5, 0.0);
+        farParticles(level, ParticleTypes.CLOUD, px, py, pz, 18, 0.55, 0.45, 0.55, 0.03);
+        farParticles(level, ParticleTypes.LARGE_SMOKE, px, py, pz, 6, 0.4, 0.3, 0.4, 0.02);
+        farParticles(level, dust(Fluid.WATER), px, py + 0.3, pz, 6, 0.5, 0.4, 0.5, 0.0);
         if (doused && level.random.nextInt(6) == 0) {
             level.playSound(null, BlockPos.containing(px, py, pz), SoundEvents.FIRE_EXTINGUISH, SoundSource.BLOCKS,
                     0.7f, 1.0f + level.random.nextFloat() * 0.2f);
@@ -290,9 +290,19 @@ public final class AircraftAirDropHandler {
         }
         if (!showImpact) return;
         double px = x + 0.5, py = groundY + 1.0, pz = z + 0.5;
-        level.sendParticles(dust(Fluid.RETARDANT), px, py, pz, 8, 0.5, 0.25, 0.5, 0.0);
-        level.sendParticles(WHITE_DUST, px, py, pz, 3, 0.5, 0.2, 0.5, 0.0);
-        level.sendParticles(ParticleTypes.CLOUD, px, py, pz, 5, 0.45, 0.15, 0.45, 0.01);
+        farParticles(level, dust(Fluid.RETARDANT), px, py, pz, 8, 0.5, 0.25, 0.5, 0.0);
+        farParticles(level, WHITE_DUST, px, py, pz, 3, 0.5, 0.2, 0.5, 0.0);
+        farParticles(level, ParticleTypes.CLOUD, px, py, pz, 5, 0.45, 0.15, 0.45, 0.01);
+    }
+
+    // Forces long-distance particles - visible up to 512 blocks from the camera instead of the usual 32 -
+    // so the falling curtain and its ground impact stay visible when the aircraft that dropped them is high
+    // overhead. The per-player overload culls at the forced 512-block range itself.
+    private static void farParticles(ServerLevel level, ParticleOptions type, double x, double y, double z,
+                                     int count, double dx, double dy, double dz, double speed) {
+        for (ServerPlayer player : level.players()) {
+            level.sendParticles(player, type, true, x, y, z, count, dx, dy, dz, speed);
+        }
     }
 
     private static ParticleOptions dust(Fluid fluid) {

@@ -94,7 +94,9 @@ public final class RetardantRenderHandler {
     private static final RenderType OVERLAY_RENDER_TYPE = RenderType.entityTranslucent(OVERLAY_TEXTURE);
 
     private static final double CAMERA_NUDGE = 0.01; // Blocks to lift the overlay toward the camera.
-    private static final double MAX_RENDER_DIST_SQR = 64.0 * 64.0;
+    // Kept generous so retardant dropped from an aircraft is still visible from cruising altitude, rather
+    // than being culled the moment you climb away from it. The MAX_MODELS budget still bounds frame cost.
+    private static final double MAX_RENDER_DIST_SQR = 160.0 * 160.0;
     private static final int MAX_MODELS = 4096; // Hard cap so a huge sprayed area can't stall a frame.
 
     // All six face directions plus the null "general" bucket, so we gather every quad of the model.
