@@ -1,14 +1,18 @@
 package com.axes.wildfireadditions.item;
 
+import com.axes.wildfireadditions.registry.ModBlocks;
 import com.axes.wildfireadditions.util.WaterStream;
+import net.minecraft.network.chat.Component;
 import net.minecraft.server.level.ServerLevel;
 import net.minecraft.world.InteractionHand;
+import net.minecraft.world.InteractionResult;
 import net.minecraft.world.InteractionResultHolder;
 import net.minecraft.world.entity.LivingEntity;
 import net.minecraft.world.entity.player.Player;
 import net.minecraft.world.item.Item;
 import net.minecraft.world.item.ItemStack;
 import net.minecraft.world.item.UseAnim;
+import net.minecraft.world.item.context.UseOnContext;
 import net.minecraft.world.level.Level;
 import net.minecraft.world.phys.Vec3;
 
@@ -35,6 +39,23 @@ public class HoseItem extends Item implements ReducedUseSlowdownItem {
     @Override
     public int getUseDuration(ItemStack stack, LivingEntity entity) {
         return 72000;
+    }
+
+    // Shift-right-clicking the Pump Box with the hose "stows" it back into the box - the reverse of
+    // grabbing it out. This runs before use()/onUseTick, so the hose is put away instead of spraying.
+    @Override
+    public InteractionResult useOn(UseOnContext context) {
+        Player player = context.getPlayer();
+        Level level = context.getLevel();
+        if (player != null && player.isSecondaryUseActive()
+                && level.getBlockState(context.getClickedPos()).is(ModBlocks.PUMP_BOX.get())) {
+            if (!level.isClientSide()) {
+                context.getItemInHand().shrink(1);
+                player.displayClientMessage(Component.literal("Hose stowed back in the pump box."), true);
+            }
+            return InteractionResult.sidedSuccess(level.isClientSide());
+        }
+        return super.useOn(context);
     }
 
     // Triggered when the player first clicks right-click

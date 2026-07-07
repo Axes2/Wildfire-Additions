@@ -9,7 +9,6 @@ import net.minecraft.sounds.SoundEvents;
 import net.minecraft.sounds.SoundSource;
 import net.minecraft.world.InteractionHand;
 import net.minecraft.world.InteractionResultHolder;
-import net.minecraft.world.entity.EquipmentSlot;
 import net.minecraft.world.entity.LivingEntity;
 import net.minecraft.world.entity.player.Player;
 import net.minecraft.world.item.Item;
@@ -32,9 +31,13 @@ import net.minecraft.world.phys.Vec3;
  * <ul>
  *   <li><b>Durability.</b> Built with {@code .durability(256)}, so it wears like an iron tool - one
  *       point per block it actually coats. Re-spraying an already-coated surface costs nothing, so the
- *       real cost tracks how much <i>new</i> area you protect.</li>
- *   <li><b>Refill = repair.</b> {@link #isValidRepairItem} makes Magma Cream a valid anvil repair
- *       material, so "reloading the chemical" is just repairing the tool the vanilla way.</li>
+ *       real cost tracks how much <i>new</i> area you protect. Unlike a normal tool it never
+ *       <i>breaks</i>: once the chemical is spent it simply stops spraying until refilled (see
+ *       {@link #REFILL_PER_MAGMA_CREAM}).</li>
+ *   <li><b>Refill with Magma Cream.</b> Two vanilla-flavoured ways to top the compound back up, each
+ *       worth 25% per Magma Cream: {@link #isValidRepairItem} makes it a valid anvil repair material,
+ *       and a dedicated crafting-grid recipe (see {@code RetardantSprayerRefillRecipe}) does the same
+ *       on a workbench.</li>
  * </ul>
  *
  * <p>The coating itself is not a block change: it's a per-chunk note recorded through
@@ -44,6 +47,10 @@ import net.minecraft.world.phys.Vec3;
 public class RetardantSprayerItem extends Item implements ReducedUseSlowdownItem {
 
     public static final int DURABILITY = 256;
+
+    // Each Magma Cream restores a quarter of the sprayer's full charge, whether refilled on an anvil or
+    // in a crafting grid. Matches vanilla's "repair material = 25% per unit" anvil behaviour.
+    public static final int REFILL_PER_MAGMA_CREAM = DURABILITY / 4;
 
     private static final double RANGE = 6.0; // How far the spray reaches, in blocks.
     private static final int SPRAY_INTERVAL = 4; // Ticks between coating passes (and durability drain).
@@ -80,6 +87,9 @@ public class RetardantSprayerItem extends Item implements ReducedUseSlowdownItem
     @Override
     public void onUseTick(Level level, LivingEntity entity, ItemStack stack, int remainingUseDuration) {
         if (!(entity instanceof Player player)) return;
+
+        // Out of chemical: the tool stays intact (it never breaks) but does nothing until refilled.
+        if (isEmpty(stack) && !player.getAbilities().instabuild) return;
 
         Vec3 eye = player.getEyePosition();
         Vec3 look = player.getLookAngle();
@@ -134,9 +144,10 @@ public class RetardantSprayerItem extends Item implements ReducedUseSlowdownItem
         if (coatedCount == 0) return; // Aimed at bare air or an already-coated surface: no wear, no sound.
 
         if (!player.getAbilities().instabuild) {
-            EquipmentSlot slot = player.getUsedItemHand() == InteractionHand.MAIN_HAND
-                    ? EquipmentSlot.MAINHAND : EquipmentSlot.OFFHAND;
-            stack.hurtAndBreak(coatedCount, player, slot);
+            // Drain durability without ever destroying the item: clamp at max damage instead of calling
+            // hurtAndBreak, which would shatter the sprayer once the charge ran out.
+            int newDamage = Math.min(stack.getDamageValue() + coatedCount, stack.getMaxDamage());
+            stack.setDamageValue(newDamage);
         }
 
         level.playSound(null, center, SoundEvents.FIRE_EXTINGUISH, SoundSource.PLAYERS,
@@ -152,6 +163,12 @@ public class RetardantSprayerItem extends Item implements ReducedUseSlowdownItem
      */
     public static boolean isCoatable(Level level, BlockPos pos, BlockState state) {
         return !state.isAir() && !state.liquid();
+    }
+
+    // The sprayer is "empty" - out of retardant - once its durability is fully spent. It doesn't break at
+    // this point; it just stops working until topped up with Magma Cream.
+    public static boolean isEmpty(ItemStack stack) {
+        return stack.getDamageValue() >= stack.getMaxDamage();
     }
 
     // A dense cone of red retardant dust from the nozzle out to where the spray lands, widening with
