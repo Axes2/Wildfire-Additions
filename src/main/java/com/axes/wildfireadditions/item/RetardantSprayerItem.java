@@ -41,7 +41,7 @@ import net.minecraft.world.phys.Vec3;
  * {@link RetardantCoating}, which is what lets it flag arbitrary blocks (stairs, fences, logs...) as
  * fire-resistant without registering any new block states.
  */
-public class RetardantSprayerItem extends Item {
+public class RetardantSprayerItem extends Item implements ReducedUseSlowdownItem {
 
     public static final int DURABILITY = 256;
 
