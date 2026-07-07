@@ -74,6 +74,14 @@ public final class AircraftAirDropHandler {
     /** How many particle clusters to scatter across the live curtain each tick. */
     private static final int FALL_CLUSTERS_PER_TICK = 40;
 
+    // Progressive per-viewer particle culling. Within CULL_NEAR blocks a viewer sees the full particle
+    // count; from there it tapers linearly to CULL_FLOOR (10%) by CULL_FAR blocks and stays there. This is
+    // what keeps a drop from lagging: a player watching from altitude or across the map renders a tenth of
+    // the particles, which looks the same at that range, while someone right on top of it still sees it all.
+    private static final double CULL_NEAR = 16.0;
+    private static final double CULL_FAR = 48.0;
+    private static final double CULL_FLOOR = 0.1;
+
     private static final Vector3f BLUE = new Vector3f(0.20f, 0.52f, 1.0f);
     private static final Vector3f RED = new Vector3f(0.90f, 0.13f, 0.10f);
     private static final Vector3f WHITE = new Vector3f(0.95f, 0.97f, 1.0f);
@@ -297,12 +305,34 @@ public final class AircraftAirDropHandler {
 
     // Forces long-distance particles - visible up to 512 blocks from the camera instead of the usual 32 -
     // so the falling curtain and its ground impact stay visible when the aircraft that dropped them is high
-    // overhead. The per-player overload culls at the forced 512-block range itself.
+    // overhead. Each viewer's copy is scaled down by distance (see scaleForDistance) so far-off players get
+    // a fraction of the particles for the same look at a tenth of the cost.
     private static void farParticles(ServerLevel level, ParticleOptions type, double x, double y, double z,
                                      int count, double dx, double dy, double dz, double speed) {
         for (ServerPlayer player : level.players()) {
-            level.sendParticles(player, type, true, x, y, z, count, dx, dy, dz, speed);
+            int scaled = scaleForDistance(level.random, count, player.distanceToSqr(x, y, z));
+            if (scaled <= 0) continue;
+            level.sendParticles(player, type, true, x, y, z, scaled, dx, dy, dz, speed);
         }
+    }
+
+    // Full count within CULL_NEAR, tapering linearly to CULL_FLOOR of the count by CULL_FAR and holding
+    // there beyond. Stochastic rounding keeps the average on the curve even for small counts, so a
+    // 3-particle cluster far away still contributes ~10% of its particles on average rather than snapping
+    // straight to zero.
+    private static int scaleForDistance(RandomSource rng, int count, double distSqr) {
+        double fraction;
+        if (distSqr <= CULL_NEAR * CULL_NEAR) {
+            fraction = 1.0;
+        } else if (distSqr >= CULL_FAR * CULL_FAR) {
+            fraction = CULL_FLOOR;
+        } else {
+            double t = (Math.sqrt(distSqr) - CULL_NEAR) / (CULL_FAR - CULL_NEAR);
+            fraction = 1.0 - t * (1.0 - CULL_FLOOR);
+        }
+        double target = count * fraction;
+        int whole = (int) Math.floor(target);
+        return whole + (rng.nextDouble() < target - whole ? 1 : 0);
     }
 
     private static ParticleOptions dust(Fluid fluid) {
