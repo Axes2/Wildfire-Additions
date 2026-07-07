@@ -46,45 +46,63 @@ public final class WaterStream {
     private static final double STEP_DT = 0.025; // simulation resolution, in seconds
     private static final int MAX_STEPS = 400; // hard safety cap (10s of flight time), should never actually be hit
 
+    // The water stays airborne for about as long as a WaterJetParticle lives (its lifetime is ~2.0-2.6s),
+    // so the trace follows the arc for this long before giving up. Bounding by flight time rather than by
+    // straight-line distance is what lets a stream fired from up high still reach - and douse - a fire far
+    // below: the long vertical drop no longer counts against a short distance cap, so wherever the visible
+    // droplets can land, the douse lands too.
+    public static final double MAX_FLIGHT_TIME = 2.5; // seconds of simulated flight the trace follows
+
     // Extinguishing strength, shared so the hose and the turret are exactly as effective as each other.
     // Cooling now ticks twice a second (COOL_PERIOD = 10 rather than a full 20-tick second) so even a
     // raging block is fully doused in roughly 1.5-2s of direct spray instead of the old 3-4s.
     public static final int COOL_PERIOD = 10; // ticks between actual intensity reductions
     private static final int INTENSITY_STEP = 3; // how much a PMWFireBlock cools per reduction
 
-    // Where a simulated water arc ends up: either the block it hit, or its last position before
-    // dissipating past the max range (hitBlock null in that case), and how long (in simulated seconds)
-    // it took to get there.
-    public record TrajectoryResult(Vec3 endPosition, @Nullable BlockPos hitBlock, double flightTime) {
+    // What a hose stream should douse and when: the block position to run the douse pass on (a fire the
+    // arc flew through, or the solid surface it landed on), plus the flight time to get there so the
+    // douse is scheduled for when the water actually arrives. {@code douseTarget} is null only when the
+    // stream dissipated in open air without reaching anything.
+    public record HoseTrace(@Nullable BlockPos douseTarget, double flightTime) {
     }
 
-    // Simulates the water as a gravity-affected projectile down `direction` from `origin`. This is the
-    // sole source of truth for where a stream actually lands - the visual particles are a separate,
-    // merely approximate depiction of this same arc. `source`, if non-null, is excluded from collision
-    // (so a player's own hose stream doesn't clip on the player); the turret passes null.
-    public static TrajectoryResult traceTrajectory(Level level, @Nullable Entity source, Vec3 origin, Vec3 direction, double speed, double maxRange) {
+    // Simulates a hand-aimed hose stream as a gravity-affected projectile down `direction` from `origin`,
+    // following it for the water's whole airborne life (MAX_FLIGHT_TIME), and reports what it should
+    // douse. Fire has no collision, so the arc flies straight through it: the first fire cell the arc
+    // passes through is what we douse (that's the flame the player is playing the stream onto, even if it
+    // is floating or on a wall and the water carries on to the ground behind it). Failing any fire, the
+    // stream douses wherever it lands on a solid surface - a 3x3x3 wetting pass that also catches fire
+    // sitting right on that ground. `source`, if non-null, is excluded from collision so a player's own
+    // stream doesn't clip on them. Bounding by flight time (not straight-line distance) means a stream
+    // fired from high ground reaches the fire far below exactly as far as the visible droplets do.
+    public static HoseTrace traceHose(Level level, @Nullable Entity source, Vec3 origin, Vec3 direction, double speed) {
         Vec3 pos = origin;
         Vec3 velocity = direction.normalize().scale(speed);
         CollisionContext ctx = source == null ? CollisionContext.empty() : CollisionContext.of(source);
 
         for (int step = 0; step < MAX_STEPS; step++) {
             double elapsed = step * STEP_DT;
-            Vec3 nextPos = pos.add(velocity.scale(STEP_DT));
-
-            if (nextPos.distanceTo(origin) > maxRange) {
-                return new TrajectoryResult(pos, null, elapsed);
+            if (elapsed > MAX_FLIGHT_TIME) {
+                return new HoseTrace(null, elapsed); // dissipated in open air
             }
 
+            // A fire cell the arc is passing through is the thing to put out.
+            BlockPos cell = BlockPos.containing(pos);
+            BlockState here = level.getBlockState(cell);
+            if (here.getBlock() instanceof PMWFireBlock || here.is(Blocks.FIRE)) {
+                return new HoseTrace(cell, elapsed);
+            }
+
+            Vec3 nextPos = pos.add(velocity.scale(STEP_DT));
             HitResult hit = level.clip(new ClipContext(pos, nextPos, ClipContext.Block.COLLIDER, ClipContext.Fluid.NONE, ctx));
             if (hit.getType() == HitResult.Type.BLOCK) {
-                BlockHitResult blockHit = (BlockHitResult) hit;
-                return new TrajectoryResult(blockHit.getLocation(), blockHit.getBlockPos(), elapsed + STEP_DT);
+                return new HoseTrace(((BlockHitResult) hit).getBlockPos(), elapsed + STEP_DT); // landed on a surface
             }
 
             pos = nextPos;
             velocity = velocity.add(0, -GRAVITY * STEP_DT, 0);
         }
-        return new TrajectoryResult(pos, null, MAX_STEPS * STEP_DT);
+        return new HoseTrace(null, MAX_STEPS * STEP_DT);
     }
 
     // How close (in blocks) the simulated arc must pass to a fire block for the turret to consider it
@@ -98,11 +116,11 @@ public final class WaterStream {
     }
 
     // Traces the arc from `origin` down `direction` and reports whether it reaches `targetCenter` (passes
-    // within `tolerance`) before a solid block blocks it. This is how the turret does both line-of-sight
-    // ("can the water actually get to this fire, or is there a wall in the way?") and visual truncation -
-    // fire blocks don't collide, so a plain landing-point trace would sail through the fire and stop far
-    // beyond it, which is exactly the trap the old code fell into.
-    public static TargetTrace traceToTarget(Level level, Vec3 origin, Vec3 direction, double speed, double maxRange, Vec3 targetCenter, double tolerance) {
+    // within `tolerance`) before a solid block blocks it. This is how the turret does line-of-sight
+    // ("can the water actually get to this fire, or is there a wall in the way?"). Like the hose trace it
+    // follows the arc for the water's whole airborne life rather than a straight-line distance cap, so an
+    // elevated turret can still confirm - and hit - a fire well below it.
+    public static TargetTrace traceToTarget(Level level, Vec3 origin, Vec3 direction, double speed, Vec3 targetCenter, double tolerance) {
         Vec3 pos = origin;
         Vec3 velocity = direction.normalize().scale(speed);
         double tolSq = tolerance * tolerance;
@@ -113,12 +131,11 @@ public final class WaterStream {
             if (pos.distanceToSqr(targetCenter) <= tolSq) {
                 return new TargetTrace(true, pos, elapsed); // arc reached the fire
             }
-
-            Vec3 nextPos = pos.add(velocity.scale(STEP_DT));
-            if (nextPos.distanceTo(origin) > maxRange) {
+            if (elapsed > MAX_FLIGHT_TIME) {
                 return new TargetTrace(false, pos, elapsed); // dissipated short of the fire
             }
 
+            Vec3 nextPos = pos.add(velocity.scale(STEP_DT));
             HitResult hit = level.clip(new ClipContext(pos, nextPos, ClipContext.Block.COLLIDER, ClipContext.Fluid.NONE, CollisionContext.empty()));
             if (hit.getType() == HitResult.Type.BLOCK) {
                 return new TargetTrace(false, ((BlockHitResult) hit).getLocation(), elapsed + STEP_DT); // blocked by cover
@@ -132,7 +149,7 @@ public final class WaterStream {
 
     // --- Continuous nozzle emission (client-side visuals) -------------------------------------------
     // Droplets are spawned only at the nozzle, carrying the stream's real exit velocity, and fly their
-    // own ballistic arcs client-side (WaterJetParticle integrates the same GRAVITY as traceTrajectory,
+    // own ballistic arcs client-side (WaterJetParticle integrates the same GRAVITY as the server trace,
     // collides with the world itself and splashes where it personally lands). Each tick's batch is
     // spread across several sub-tick emission points along the first tick of travel, so consecutive
     // batches join into one unbroken rope of water with no beading. The fan-out of the stream downrange

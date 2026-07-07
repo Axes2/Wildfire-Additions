@@ -47,7 +47,6 @@ public class FireSprinklerBlockEntity extends BlockEntity {
     // is v^2/g = 21^2/16 ~= 27.5 blocks, so the detection radius is kept just inside that (SCAN_RANGE)
     // to make sure every fire it targets is actually reachable.
     private static final double STREAM_SPEED = 21.0;
-    private static final double MAX_RANGE = 30.0; // straight-line dissipation distance for the stream
 
     // The nozzle sits at the centre of the head, 24px (1.5 blocks) up from the bottom of the model.
     private static final double NOZZLE_HEIGHT = 24.0 / 16.0;
@@ -141,7 +140,7 @@ public class FireSprinklerBlockEntity extends BlockEntity {
         // no collision, so the stream passes through it and lands well beyond. It's scheduled with the
         // arc's flight time so the fire starts going out when the water physically arrives, in step
         // with the visible droplets.
-        WaterStream.TargetTrace trace = WaterStream.traceToTarget(level, origin, aim, STREAM_SPEED, MAX_RANGE, targetCenter, WaterStream.TARGET_TOLERANCE);
+        WaterStream.TargetTrace trace = WaterStream.traceToTarget(level, origin, aim, STREAM_SPEED, targetCenter, WaterStream.TARGET_TOLERANCE);
         if (trace.reached()) {
             WaterDouseQueue.schedule(serverLevel, be.target, trace.flightTime());
         }
@@ -206,7 +205,7 @@ public class FireSprinklerBlockEntity extends BlockEntity {
             if (aim == null) continue; // out of ballistic range
 
             // Reachable if the arc passes through/near the fire before any solid block blocks it.
-            if (WaterStream.traceToTarget(level, origin, aim, STREAM_SPEED, MAX_RANGE, targetCenter, WaterStream.TARGET_TOLERANCE).reached()) {
+            if (WaterStream.traceToTarget(level, origin, aim, STREAM_SPEED, targetCenter, WaterStream.TARGET_TOLERANCE).reached()) {
                 return candidate;
             }
         }
