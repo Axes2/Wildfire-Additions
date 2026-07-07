@@ -28,8 +28,8 @@ public record AircraftTankData(boolean installed, Fluid fluid, int charges) {
             Codec.INT.fieldOf("charges").forGetter(AircraftTankData::charges)
     ).apply(instance, AircraftTankData::new));
 
-    /** A freshly fitted, empty tank. */
-    public static AircraftTankData installed() {
+    /** A freshly fitted, empty tank. Named to avoid clashing with the record's {@code installed()} accessor. */
+    public static AircraftTankData fitted() {
         return new AircraftTankData(true, Fluid.NONE, 0);
     }
 

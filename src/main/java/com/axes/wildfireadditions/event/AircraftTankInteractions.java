@@ -85,7 +85,7 @@ public final class AircraftTankInteractions {
                                 ItemStack stack, AircraftTankData tank, Action action) {
         switch (action) {
             case INSTALL -> {
-                aircraft.setData(ModAttachments.AIRCRAFT_TANK.get(), AircraftTankData.installed());
+                aircraft.setData(ModAttachments.AIRCRAFT_TANK.get(), AircraftTankData.fitted());
                 if (!player.getAbilities().instabuild) stack.shrink(1);
                 playAt(level, aircraft, SoundEvents.ITEM_FRAME_ADD_ITEM, 0.9f);
             }
