@@ -1,7 +1,9 @@
 package com.axes.wildfireadditions.registry;
 
 import com.axes.wildfireadditions.WildfireAdditions;
+import com.axes.wildfireadditions.item.AircraftTankItem;
 import com.axes.wildfireadditions.item.DripTorchItem;
+import com.axes.wildfireadditions.item.FireRetardantBucketItem;
 import com.axes.wildfireadditions.item.HoseItem;
 import com.axes.wildfireadditions.item.RetardantSprayerItem;
 import net.minecraft.world.item.BlockItem;
@@ -26,4 +28,13 @@ public class ModItems {
 
     public static final DeferredItem<Item> RETARDANT_SPRAYER = ITEMS.register("retardant_sprayer",
             () -> new RetardantSprayerItem(new Item.Properties().durability(RetardantSprayerItem.DURABILITY)));
+
+    // A bucket of fire-retardant slurry (water bucket + 2 magma cream); loads a tank with retardant. Stacks
+    // to one like a filled bucket, so filling a tank takes three separate buckets.
+    public static final DeferredItem<Item> FIRE_RETARDANT_BUCKET = ITEMS.register("fire_retardant_bucket",
+            () -> new FireRetardantBucketItem(new Item.Properties().stacksTo(1)));
+
+    // The tank the player fits to an Immersive Aircraft vehicle to drop water or retardant from the air.
+    public static final DeferredItem<Item> AIRCRAFT_TANK = ITEMS.register("aircraft_tank",
+            () -> new AircraftTankItem(new Item.Properties().stacksTo(1)));
 }

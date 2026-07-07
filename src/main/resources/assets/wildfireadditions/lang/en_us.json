@@ -3,5 +3,12 @@
 	"block.wildfireadditions.fire_sprinkler": "Fire Sprinkler",
 	"item.wildfireadditions.hose": "Fire Hose",
 	"item.wildfireadditions.drip_torch": "Drip Torch",
-	"item.wildfireadditions.retardant_sprayer": "Retardant Sprayer"
+	"item.wildfireadditions.retardant_sprayer": "Retardant Sprayer",
+	"item.wildfireadditions.fire_retardant_bucket": "Fire Retardant Bucket",
+	"item.wildfireadditions.fire_retardant_bucket.desc": "Loads an aircraft tank with retardant",
+	"item.wildfireadditions.aircraft_tank": "Aircraft Tank",
+	"item.wildfireadditions.aircraft_tank.desc": "Right-click an aircraft to fit it, then load with 3 water or retardant buckets",
+	"item.wildfireadditions.aircraft_tank.desc2": "While flying, press Deploy Aircraft Tank to drop the payload",
+	"key.categories.wildfireadditions": "Wildfire Additions",
+	"key.wildfireadditions.deploy_tank": "Deploy Aircraft Tank"
 }

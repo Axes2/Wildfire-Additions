@@ -1,0 +1,19 @@
+{
+	"type": "minecraft:crafting_shapeless",
+	"category": "misc",
+	"ingredients": [
+		{
+			"item": "minecraft:water_bucket"
+		},
+		{
+			"item": "minecraft:magma_cream"
+		},
+		{
+			"item": "minecraft:magma_cream"
+		}
+	],
+	"result": {
+		"id": "wildfireadditions:fire_retardant_bucket",
+		"count": 1
+	}
+}
