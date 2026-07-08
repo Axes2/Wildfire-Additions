@@ -3,6 +3,7 @@ package com.axes.wildfireadditions.event;
 import com.axes.wildfireadditions.WildfireAdditions;
 import com.axes.wildfireadditions.coating.ChunkCoatingData;
 import com.axes.wildfireadditions.coating.RetardantCoating;
+import com.axes.wildfireadditions.config.WildfireConfig;
 import com.axes.wildfireadditions.network.CoatingSync;
 import dev.protomanly.pmweather.block.PMWFireBlock;
 import it.unimi.dsi.fastutil.longs.Long2LongMap;
@@ -47,10 +48,11 @@ import net.neoforged.neoforge.event.tick.LevelTickEvent;
 @EventBusSubscriber(modid = WildfireAdditions.MODID)
 public final class RetardantFireHandler {
 
-    // The fire intensity (PMWFireBlock.INTENSITY runs 1-10) a fire must reach to burn a coated block.
-    // Read by PMWFireBlockMixin as the pre-spread veto threshold, and reused here for on-contact snuffing.
-    // A freshly spread fire starts low and only a sustained blaze climbs this high, so 9 means
-    // "practically fireproof, but the most intense infernos still win". Lower it to weaken the coating.
+    // Default fire intensity (PMWFireBlock.INTENSITY runs 1-10) a fire must reach to burn a coated block;
+    // the live value is WildfireConfig.coatingBreakthroughIntensity(), read both here for on-contact
+    // snuffing and by PMWFireBlockMixin as the pre-spread veto threshold. A freshly spread fire starts low
+    // and only a sustained blaze climbs high, so 9 means "practically fireproof, but the most intense
+    // infernos still win". Lower it (in config) to weaken the coating.
     public static final int REQUIRED_INTENSITY = 9;
 
     private static final int CHECK_PERIOD = 5; // Ticks between coating passes (~4x/second).
@@ -124,7 +126,7 @@ public final class RetardantFireHandler {
     private static void snuffIfSubThreshold(ServerLevel level, BlockPos pos) {
         BlockState state = level.getBlockState(pos);
         if (!(state.getBlock() instanceof PMWFireBlock)) return;
-        if (state.getValue(PMWFireBlock.INTENSITY) >= REQUIRED_INTENSITY) return; // Inferno: let it burn.
+        if (state.getValue(PMWFireBlock.INTENSITY) >= WildfireConfig.coatingBreakthroughIntensity()) return; // Inferno: let it burn.
         level.removeBlock(pos, false);
         spawnSmotherPuff(level, pos);
     }

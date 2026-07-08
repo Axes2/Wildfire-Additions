@@ -1,5 +1,6 @@
 package com.axes.wildfireadditions.client.hose;
 
+import com.axes.wildfireadditions.config.WildfireConfig;
 import com.axes.wildfireadditions.event.HosePhysicsHandler;
 import net.minecraft.core.BlockPos;
 import net.minecraft.util.Mth;
@@ -47,8 +48,13 @@ public final class HoseRopeSimulation {
     /** How fast surplus length is reeled back in, in blocks per tick. Slow, so slack visibly lingers. */
     private static final double REEL_IN_RATE = 0.05;
     private static final double MIN_DEPLOYED = 3.0;
-    /** The visual rope can pay out right up to the length at which the server snaps the hose. */
-    private static final double MAX_DEPLOYED = HosePhysicsHandler.MAX_HOSE_LENGTH + HosePhysicsHandler.SNAP_SLACK;
+    /**
+     * The visual rope can pay out right up to the length at which the server snaps the hose. Read live
+     * from config (not a constant) so it tracks the server's synced hose-length setting.
+     */
+    private static double maxDeployed() {
+        return WildfireConfig.maxHoseLength() + WildfireConfig.hoseSnapSlack();
+    }
     /** An end anchor jumping further than this in one tick means teleport/desync: re-drape from scratch. */
     private static final double TELEPORT_RESET_DISTANCE = 8.0;
 
@@ -125,7 +131,7 @@ public final class HoseRopeSimulation {
             z[i] = pz[i] = Mth.lerp(t, pumpAnchor.z, handAnchor.z);
             grounded[i] = false;
         }
-        deployedLength = Mth.clamp(pumpAnchor.distanceTo(handAnchor) + SLACK, MIN_DEPLOYED, MAX_DEPLOYED);
+        deployedLength = Mth.clamp(pumpAnchor.distanceTo(handAnchor) + SLACK, MIN_DEPLOYED, maxDeployed());
     }
 
     /**
@@ -142,7 +148,7 @@ public final class HoseRopeSimulation {
         } else if (deployedLength > arc + 2.0 * SLACK) {
             deployedLength = Math.max(arc + SLACK, deployedLength - REEL_IN_RATE);
         }
-        deployedLength = Mth.clamp(deployedLength, MIN_DEPLOYED, MAX_DEPLOYED);
+        deployedLength = Mth.clamp(deployedLength, MIN_DEPLOYED, maxDeployed());
     }
 
     private double arcLength() {

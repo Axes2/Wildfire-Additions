@@ -1,5 +1,6 @@
 package com.axes.wildfireadditions.util;
 
+import com.axes.wildfireadditions.config.WildfireConfig;
 import com.axes.wildfireadditions.registry.ModParticles;
 import dev.protomanly.pmweather.block.PMWFireBlock;
 import net.minecraft.core.BlockPos;
@@ -56,6 +57,7 @@ public final class WaterStream {
     // Extinguishing strength, shared so the hose and the turret are exactly as effective as each other.
     // Cooling now ticks twice a second (COOL_PERIOD = 10 rather than a full 20-tick second) so even a
     // raging block is fully doused in roughly 1.5-2s of direct spray instead of the old 3-4s.
+    // Defaults; live values are WildfireConfig.douseCoolPeriodTicks()/douseIntensityStep().
     public static final int COOL_PERIOD = 10; // ticks between actual intensity reductions
     private static final int INTENSITY_STEP = 3; // how much a PMWFireBlock cools per reduction
 
@@ -219,7 +221,7 @@ public final class WaterStream {
     public static void extinguishAt(ServerLevel serverLevel, BlockPos center, long ticker) {
         boolean playedHiss = false;
         boolean playedDouseBurst = false;
-        boolean coolFireThisPass = ticker % COOL_PERIOD < 2;
+        boolean coolFireThisPass = ticker % WildfireConfig.douseCoolPeriodTicks() < 2;
 
         for (int x = -1; x <= 1; x++) {
             for (int y = -1; y <= 1; y++) {
@@ -242,7 +244,7 @@ public final class WaterStream {
 
                         if (!coolFireThisPass) continue;
 
-                        int newIntensity = currentIntensity - INTENSITY_STEP;
+                        int newIntensity = currentIntensity - WildfireConfig.douseIntensityStep();
                         if (newIntensity <= 0) {
                             serverLevel.removeBlock(checkPos, false);
 

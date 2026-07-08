@@ -1,6 +1,7 @@
 package com.axes.wildfireadditions.item;
 
 import com.axes.wildfireadditions.coating.RetardantCoating;
+import com.axes.wildfireadditions.config.WildfireConfig;
 import net.minecraft.core.BlockPos;
 import net.minecraft.core.Direction;
 import net.minecraft.core.particles.DustParticleOptions;
@@ -31,15 +32,15 @@ import net.minecraft.world.phys.Vec3;
  *
  * <p>It leans entirely on vanilla tool mechanics for its economy and balance:
  * <ul>
- *   <li><b>Durability.</b> Built with {@code .durability(256)}, so it wears like an iron tool - one
- *       point per block it actually coats. Re-spraying an already-coated surface costs nothing, so the
- *       real cost tracks how much <i>new</i> area you protect. Unlike a normal tool it never
- *       <i>breaks</i>: once the chemical is spent it simply stops spraying until refilled (see
- *       {@link #REFILL_PER_MAGMA_CREAM}).</li>
- *   <li><b>Refill with Magma Cream.</b> Two vanilla-flavoured ways to top the compound back up, each
- *       worth 25% per Magma Cream: {@link #isValidRepairItem} makes it a valid anvil repair material,
- *       and a dedicated crafting-grid recipe (see {@code RetardantSprayerRefillRecipe}) does the same
- *       on a workbench.</li>
+ *   <li><b>Durability.</b> Built with a configurable charge pool (default 256, see
+ *       {@link WildfireConfig#sprayerDurability()}), so it wears like a tool - one point per block it
+ *       actually coats. Re-spraying an already-coated surface costs nothing, so the real cost tracks how
+ *       much <i>new</i> area you protect. Unlike a normal tool it never <i>breaks</i>: once the chemical
+ *       is spent it simply stops spraying until refilled.</li>
+ *   <li><b>Refill with Magma Cream.</b> Two vanilla-flavoured ways to top the compound back up:
+ *       {@link #isValidRepairItem} makes it a valid anvil repair material, and a dedicated crafting-grid
+ *       recipe (see {@code RetardantSprayerRefillRecipe}) restores a configurable percentage per Magma
+ *       Cream (default 25%) on a workbench.</li>
  * </ul>
  *
  * <p>The coating itself is not a block change: it's a per-chunk note recorded through
@@ -48,11 +49,8 @@ import net.minecraft.world.phys.Vec3;
  */
 public class RetardantSprayerItem extends Item implements ReducedUseSlowdownItem {
 
+    /** Default charge pool; the live value is {@link WildfireConfig#sprayerDurability()} (config). */
     public static final int DURABILITY = 256;
-
-    // Each Magma Cream restores a quarter of the sprayer's full charge, whether refilled on an anvil or
-    // in a crafting grid. Matches vanilla's "repair material = 25% per unit" anvil behaviour.
-    public static final int REFILL_PER_MAGMA_CREAM = DURABILITY / 4;
 
     private static final double RANGE = 6.0; // How far the spray reaches, in blocks.
     private static final int SPRAY_INTERVAL = 4; // Ticks between coating passes (and durability drain).

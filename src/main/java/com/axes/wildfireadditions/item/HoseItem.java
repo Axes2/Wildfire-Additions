@@ -37,9 +37,9 @@ public class HoseItem extends Item implements ReducedUseSlowdownItem {
     // offset - well inside the douse's 3x3 area and the fire-hit tolerance. Pushed a little further
     // forward and tucked in toward the aim now that the spraying model (hose_spraying.json) pitches the
     // nozzle forward, so the stream reads as leaving the nozzle tip rather than a point beside the hand.
-    private static final double NOZZLE_FORWARD = 0.6;
-    private static final double NOZZLE_SIDE = 0.33;
-    private static final double NOZZLE_DOWN = 0.1;
+    private static final double NOZZLE_FORWARD = 0.45;
+    private static final double NOZZLE_SIDE = 0.35;
+    private static final double NOZZLE_DOWN = 0.08;
 
     public HoseItem(Properties properties) {
         super(properties);

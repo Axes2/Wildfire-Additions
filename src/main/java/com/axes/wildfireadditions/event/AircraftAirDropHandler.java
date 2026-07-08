@@ -3,6 +3,7 @@ package com.axes.wildfireadditions.event;
 import com.axes.wildfireadditions.WildfireAdditions;
 import com.axes.wildfireadditions.aircraft.AircraftTankData.Fluid;
 import com.axes.wildfireadditions.coating.RetardantCoating;
+import com.axes.wildfireadditions.config.WildfireConfig;
 import com.axes.wildfireadditions.item.RetardantSprayerItem;
 import dev.protomanly.pmweather.block.PMWFireBlock;
 import it.unimi.dsi.fastutil.longs.LongOpenHashSet;
@@ -261,7 +262,7 @@ public final class AircraftAirDropHandler {
                     BlockState state = level.getBlockState(pos);
                     if (state.getBlock() instanceof PMWFireBlock) {
                         int intensity = state.getValue(PMWFireBlock.INTENSITY);
-                        int next = intensity - WATER_INTENSITY_STEP;
+                        int next = intensity - WildfireConfig.aircraftWaterKnockdown();
                         if (next <= 0) {
                             level.removeBlock(pos, false);
                         } else {
@@ -351,7 +352,7 @@ public final class AircraftAirDropHandler {
         final Entity aircraft;
         final List<Puff> puffs = new ArrayList<>();
         final LongSet seen = new LongOpenHashSet();
-        int ticksRemaining = RUN_TICKS;
+        int ticksRemaining = WildfireConfig.aircraftRunDurationTicks();
         double runDistance;
         double lastX;
         double lastZ;

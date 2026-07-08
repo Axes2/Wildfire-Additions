@@ -1,5 +1,6 @@
 package com.axes.wildfireadditions.recipe;
 
+import com.axes.wildfireadditions.config.WildfireConfig;
 import com.axes.wildfireadditions.item.RetardantSprayerItem;
 import com.axes.wildfireadditions.registry.ModRecipes;
 import net.minecraft.core.HolderLookup;
@@ -14,8 +15,8 @@ import net.minecraft.world.level.Level;
 /**
  * A shapeless crafting-grid "refill" for the {@link RetardantSprayerItem}: drop a spent (or partly spent)
  * sprayer plus one or more Magma Cream into a crafting grid to top the retardant charge back up. Each
- * Magma Cream restores {@link RetardantSprayerItem#REFILL_PER_MAGMA_CREAM} durability (25% of full),
- * mirroring the anvil repair so both refill routes behave identically.
+ * Magma Cream restores a configurable percentage of full charge (default 25%, see
+ * {@link WildfireConfig#sprayerRefillPercentPerMagmaCream()}).
  *
  * <p>Implemented as a {@link CustomRecipe} rather than a data-driven shapeless recipe because the result's
  * durability depends on how much Magma Cream is supplied and how damaged the incoming sprayer is - values
@@ -70,7 +71,12 @@ public class RetardantSprayerRefillRecipe extends CustomRecipe {
 
         ItemStack result = sprayer.copy();
         result.setCount(1);
-        int restored = magmaCount * RetardantSprayerItem.REFILL_PER_MAGMA_CREAM;
+        // Each Magma Cream restores a configurable percentage of the sprayer's full charge (default 25%),
+        // scaled to whatever the durability pool is currently set to. At least 1 point, so a tiny pool or
+        // percentage still does something.
+        int perCream = Math.max(1,
+                (int) Math.round(result.getMaxDamage() * WildfireConfig.sprayerRefillPercentPerMagmaCream() / 100.0));
+        int restored = magmaCount * perCream;
         result.setDamageValue(Math.max(0, result.getDamageValue() - restored));
         return result;
     }

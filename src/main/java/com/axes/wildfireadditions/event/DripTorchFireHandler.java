@@ -1,6 +1,7 @@
 package com.axes.wildfireadditions.event;
 
 import com.axes.wildfireadditions.WildfireAdditions;
+import com.axes.wildfireadditions.config.WildfireConfig;
 import dev.protomanly.pmweather.block.ModBlocks;
 import dev.protomanly.pmweather.block.PMWFireBlock;
 import dev.protomanly.pmweather.data.DataAttachments;
@@ -114,6 +115,7 @@ public class DripTorchFireHandler {
     // Raised substantially: a wide, slow-advancing backfire that's actually starving a fire line of
     // fuel needs far more simultaneously-tracked embers than a thin trail ever did. Affordable because
     // the only per-ember work each tick is one cheap block-state read (the intensity clamp).
+    // Default only; the live cap is WildfireConfig.maxTrackedEmbers().
     private static final int MAX_EMBERS = 4000;
 
     // The intensity clamp is one block-state read (plus a write only when it fires) per tracked ember.
@@ -206,7 +208,7 @@ public class DripTorchFireHandler {
         pos = pos.immutable();
         DripTorchEmberData data = store(level);
         Map<BlockPos, Integer> set = data.view();
-        if (set.size() >= MAX_EMBERS) return false;
+        if (set.size() >= WildfireConfig.maxTrackedEmbers()) return false;
 
         // Never overwrite existing fire - that includes our own embers, but critically also the
         // wildfire itself, which we must never override. (Fire may be in the REPLACEABLE tag below, so
@@ -239,7 +241,9 @@ public class DripTorchFireHandler {
     }
 
     private static int randomSpreadBudget(ServerLevel level) {
-        return NO_FIRE_SPREAD_MIN + level.random.nextInt(NO_FIRE_SPREAD_MAX - NO_FIRE_SPREAD_MIN + 1);
+        int min = WildfireConfig.dripTorchClearRadiusMin();
+        int max = WildfireConfig.dripTorchClearRadiusMax();
+        return min + level.random.nextInt(max - min + 1);
     }
 
     @SubscribeEvent
@@ -321,7 +325,7 @@ public class DripTorchFireHandler {
     // monopolising every pass.
     private static void creepTowardFire(ServerLevel level, DripTorchEmberData data) {
         Map<BlockPos, Integer> set = data.view();
-        if (set.size() >= MAX_EMBERS) return;
+        if (set.size() >= WildfireConfig.maxTrackedEmbers()) return;
 
         // The idle outward clear runs on a slower cadence than the toward-fire creep (see
         // NO_FIRE_SPREAD_PERIOD). Toward-fire steps still happen every pass; the no-fire ring is only
@@ -333,7 +337,7 @@ public class DripTorchFireHandler {
         int attempts = 0;
 
         for (BlockPos ember : frontier) {
-            if (attempts >= CREEP_BUDGET || set.size() >= MAX_EMBERS) break;
+            if (attempts >= CREEP_BUDGET || set.size() >= WildfireConfig.maxTrackedEmbers()) break;
             // Skip embers whose chunk is unloaded - creeping from one would force-load it (and the
             // chunks its fire/ground scan reaches into) purely to advance a fire nobody is watching.
             if (!isLoaded(level, ember)) continue;
@@ -375,7 +379,7 @@ public class DripTorchFireHandler {
     private static void spreadOutward(ServerLevel level, Map<BlockPos, Integer> set, BlockPos ember, int budget) {
         int childBudget = budget - 1;
         for (Direction dir : Direction.Plane.HORIZONTAL) {
-            if (set.size() >= MAX_EMBERS) return;
+            if (set.size() >= WildfireConfig.maxTrackedEmbers()) return;
             int tx = ember.getX() + dir.getStepX();
             int tz = ember.getZ() + dir.getStepZ();
             BlockPos top = level.getHeightmapPos(Heightmap.Types.MOTION_BLOCKING_NO_LEAVES, new BlockPos(tx, 0, tz));
