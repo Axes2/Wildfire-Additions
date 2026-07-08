@@ -1,5 +1,6 @@
 package com.axes.wildfireadditions.util;
 
+import com.axes.wildfireadditions.registry.ModParticles;
 import dev.protomanly.pmweather.block.PMWFireBlock;
 import net.minecraft.core.BlockPos;
 import net.minecraft.core.particles.ParticleTypes;
@@ -24,6 +25,12 @@ import org.jetbrains.annotations.Nullable;
  * arc physics, particle look, sizzle/steam feedback and cooling math as a player working a hose - the
  * only things the two callers vary are the nozzle speed and reach (a fixed high-pressure monitor throws
  * further than a handheld line).
+ *
+ * <p>Visually, the stream is no longer painted along a precomputed arc: {@link #emitHoseStream} and
+ * {@link #emitTurretStream} launch physics-driven droplet particles from the nozzle each tick and the
+ * droplets fly the arc themselves (see {@code WaterJetParticle}), so water genuinely travels from the
+ * nozzle to the fire. Gameplay-side, the douse is scheduled through {@code WaterDouseQueue} with the
+ * traced flight time, so the fire starts going out when the water visibly arrives.
  */
 public final class WaterStream {
 
@@ -32,18 +39,19 @@ public final class WaterStream {
 
     // Ballistic constants shared by every water stream. The water is simulated as a gravity-affected
     // projectile rather than an instant ray, so reach depends on aim angle and height and the stream
-    // visibly arcs down over its flight.
+    // visibly arcs down over its flight. GRAVITY is also the exact per-tick acceleration the client's
+    // WaterJetParticle integrates (16 / 400 = vanilla's 0.04 blocks/tick^2), keeping the visible
+    // droplets and the authoritative server trace on the same arc.
     public static final double GRAVITY = 16.0; // blocks/second^2 applied to the stream's fall
     private static final double STEP_DT = 0.025; // simulation resolution, in seconds
     private static final int MAX_STEPS = 400; // hard safety cap (10s of flight time), should never actually be hit
 
-    // Visual stream density/volume. The whole arc (nozzle to impact) is populated with droplets every
-    // single pass so it always reads as one solid, continuous stream instead of a single clump crawling
-    // down the arc.
-    private static final int TIME_SAMPLES_PER_PASS = 14; // points spread evenly along the whole arc
-    private static final int DROPLETS_PER_SAMPLE = 2; // independently-jittered droplets per point, for thickness
-    private static final double SPREAD_NEAR_NOZZLE = 0.05; // blocks of positional jitter right at the nozzle
-    private static final double SPREAD_AT_TARGET = 0.4; // blocks of positional jitter by the time it lands
+    // The water stays airborne for about as long as a WaterJetParticle lives (its lifetime is ~2.0-2.6s),
+    // so the trace follows the arc for this long before giving up. Bounding by flight time rather than by
+    // straight-line distance is what lets a stream fired from up high still reach - and douse - a fire far
+    // below: the long vertical drop no longer counts against a short distance cap, so wherever the visible
+    // droplets can land, the douse lands too.
+    public static final double MAX_FLIGHT_TIME = 2.5; // seconds of simulated flight the trace follows
 
     // Extinguishing strength, shared so the hose and the turret are exactly as effective as each other.
     // Cooling now ticks twice a second (COOL_PERIOD = 10 rather than a full 20-tick second) so even a
@@ -51,50 +59,50 @@ public final class WaterStream {
     public static final int COOL_PERIOD = 10; // ticks between actual intensity reductions
     private static final int INTENSITY_STEP = 3; // how much a PMWFireBlock cools per reduction
 
-    // Where a simulated water arc ends up: either the block it hit, or its last position before
-    // dissipating past the max range (hitBlock null in that case), and how long (in simulated seconds)
-    // it took to get there.
-    public record TrajectoryResult(Vec3 endPosition, @Nullable BlockPos hitBlock, double flightTime) {
+    // What a hose stream should douse and when: the block position to run the douse pass on (a fire the
+    // arc flew through, or the solid surface it landed on), plus the flight time to get there so the
+    // douse is scheduled for when the water actually arrives. {@code douseTarget} is null only when the
+    // stream dissipated in open air without reaching anything.
+    public record HoseTrace(@Nullable BlockPos douseTarget, double flightTime) {
     }
 
-    // The position of the stream at flight time `t`, assuming a clear path - only valid for
-    // t <= a trace's own flightTime, since that's the only span guaranteed collision-free.
-    public static Vec3 positionAtTime(Vec3 origin, Vec3 direction, double speed, double t) {
-        Vec3 dir = direction.normalize();
-        return new Vec3(
-                origin.x + dir.x * speed * t,
-                origin.y + dir.y * speed * t - 0.5 * GRAVITY * t * t,
-                origin.z + dir.z * speed * t
-        );
-    }
-
-    // Simulates the water as a gravity-affected projectile down `direction` from `origin`. This is the
-    // sole source of truth for where a stream actually lands - the visual particles are a separate,
-    // merely approximate depiction of this same arc. `source`, if non-null, is excluded from collision
-    // (so a player's own hose stream doesn't clip on the player); the turret passes null.
-    public static TrajectoryResult traceTrajectory(Level level, @Nullable Entity source, Vec3 origin, Vec3 direction, double speed, double maxRange) {
+    // Simulates a hand-aimed hose stream as a gravity-affected projectile down `direction` from `origin`,
+    // following it for the water's whole airborne life (MAX_FLIGHT_TIME), and reports what it should
+    // douse. Fire has no collision, so the arc flies straight through it: the first fire cell the arc
+    // passes through is what we douse (that's the flame the player is playing the stream onto, even if it
+    // is floating or on a wall and the water carries on to the ground behind it). Failing any fire, the
+    // stream douses wherever it lands on a solid surface - a 3x3x3 wetting pass that also catches fire
+    // sitting right on that ground. `source`, if non-null, is excluded from collision so a player's own
+    // stream doesn't clip on them. Bounding by flight time (not straight-line distance) means a stream
+    // fired from high ground reaches the fire far below exactly as far as the visible droplets do.
+    public static HoseTrace traceHose(Level level, @Nullable Entity source, Vec3 origin, Vec3 direction, double speed) {
         Vec3 pos = origin;
         Vec3 velocity = direction.normalize().scale(speed);
         CollisionContext ctx = source == null ? CollisionContext.empty() : CollisionContext.of(source);
 
         for (int step = 0; step < MAX_STEPS; step++) {
             double elapsed = step * STEP_DT;
-            Vec3 nextPos = pos.add(velocity.scale(STEP_DT));
-
-            if (nextPos.distanceTo(origin) > maxRange) {
-                return new TrajectoryResult(pos, null, elapsed);
+            if (elapsed > MAX_FLIGHT_TIME) {
+                return new HoseTrace(null, elapsed); // dissipated in open air
             }
 
+            // A fire cell the arc is passing through is the thing to put out.
+            BlockPos cell = BlockPos.containing(pos);
+            BlockState here = level.getBlockState(cell);
+            if (here.getBlock() instanceof PMWFireBlock || here.is(Blocks.FIRE)) {
+                return new HoseTrace(cell, elapsed);
+            }
+
+            Vec3 nextPos = pos.add(velocity.scale(STEP_DT));
             HitResult hit = level.clip(new ClipContext(pos, nextPos, ClipContext.Block.COLLIDER, ClipContext.Fluid.NONE, ctx));
             if (hit.getType() == HitResult.Type.BLOCK) {
-                BlockHitResult blockHit = (BlockHitResult) hit;
-                return new TrajectoryResult(blockHit.getLocation(), blockHit.getBlockPos(), elapsed + STEP_DT);
+                return new HoseTrace(((BlockHitResult) hit).getBlockPos(), elapsed + STEP_DT); // landed on a surface
             }
 
             pos = nextPos;
             velocity = velocity.add(0, -GRAVITY * STEP_DT, 0);
         }
-        return new TrajectoryResult(pos, null, MAX_STEPS * STEP_DT);
+        return new HoseTrace(null, MAX_STEPS * STEP_DT);
     }
 
     // How close (in blocks) the simulated arc must pass to a fire block for the turret to consider it
@@ -108,11 +116,11 @@ public final class WaterStream {
     }
 
     // Traces the arc from `origin` down `direction` and reports whether it reaches `targetCenter` (passes
-    // within `tolerance`) before a solid block blocks it. This is how the turret does both line-of-sight
-    // ("can the water actually get to this fire, or is there a wall in the way?") and visual truncation -
-    // fire blocks don't collide, so a plain landing-point trace would sail through the fire and stop far
-    // beyond it, which is exactly the trap the old code fell into.
-    public static TargetTrace traceToTarget(Level level, Vec3 origin, Vec3 direction, double speed, double maxRange, Vec3 targetCenter, double tolerance) {
+    // within `tolerance`) before a solid block blocks it. This is how the turret does line-of-sight
+    // ("can the water actually get to this fire, or is there a wall in the way?"). Like the hose trace it
+    // follows the arc for the water's whole airborne life rather than a straight-line distance cap, so an
+    // elevated turret can still confirm - and hit - a fire well below it.
+    public static TargetTrace traceToTarget(Level level, Vec3 origin, Vec3 direction, double speed, Vec3 targetCenter, double tolerance) {
         Vec3 pos = origin;
         Vec3 velocity = direction.normalize().scale(speed);
         double tolSq = tolerance * tolerance;
@@ -123,12 +131,11 @@ public final class WaterStream {
             if (pos.distanceToSqr(targetCenter) <= tolSq) {
                 return new TargetTrace(true, pos, elapsed); // arc reached the fire
             }
-
-            Vec3 nextPos = pos.add(velocity.scale(STEP_DT));
-            if (nextPos.distanceTo(origin) > maxRange) {
+            if (elapsed > MAX_FLIGHT_TIME) {
                 return new TargetTrace(false, pos, elapsed); // dissipated short of the fire
             }
 
+            Vec3 nextPos = pos.add(velocity.scale(STEP_DT));
             HitResult hit = level.clip(new ClipContext(pos, nextPos, ClipContext.Block.COLLIDER, ClipContext.Fluid.NONE, CollisionContext.empty()));
             if (hit.getType() == HitResult.Type.BLOCK) {
                 return new TargetTrace(false, ((BlockHitResult) hit).getLocation(), elapsed + STEP_DT); // blocked by cover
@@ -140,95 +147,79 @@ public final class WaterStream {
         return new TargetTrace(false, pos, MAX_STEPS * STEP_DT);
     }
 
-    // Client-side: hand-place FALLING_WATER particles along the simulated arc, from the nozzle up to
-    // `flightTime` (the caller passes the time at which the arc reaches its impact/target, so the visible
-    // stream stops there instead of overshooting). The whole drawn span is populated every pass so it
-    // reads as one solid stream; a small `animTick`-driven phase offset keeps it looking alive. A SPLASH
-    // burst is placed at `impact` (the fire, or the surface the stream lands on) when non-null.
-    public static void spawnStreamParticles(Level level, Vec3 origin, Vec3 direction, double speed, double flightTime, @Nullable Vec3 impact, long animTick) {
-        flightTime = Math.max(flightTime, 0.001);
-        double spacing = flightTime / TIME_SAMPLES_PER_PASS;
-        double phase = (animTick / 20.0) % spacing;
+    // --- Continuous nozzle emission (client-side visuals) -------------------------------------------
+    // Droplets are spawned only at the nozzle, carrying the stream's real exit velocity, and fly their
+    // own ballistic arcs client-side (WaterJetParticle integrates the same GRAVITY as the server trace,
+    // collides with the world itself and splashes where it personally lands). Each tick's batch is
+    // spread across several sub-tick emission points along the first tick of travel, so consecutive
+    // batches join into one unbroken rope of water with no beading. The fan-out of the stream downrange
+    // comes from small *angular* jitter at the nozzle - exactly how a real jet spreads - rather than the
+    // old positional-jitter-by-distance hack. Speeds are converted from blocks/second (the simulation's
+    // unit) to blocks/tick (the particle engine's unit) here.
 
-        for (int i = 0; i < TIME_SAMPLES_PER_PASS; i++) {
-            double t = i * spacing + phase;
-            if (t > flightTime) continue;
+    // The handheld line: a solid cinematic stream.
+    private static final int HOSE_SUBSTEPS = 5; // sub-tick emission points per tick
+    private static final int HOSE_DROPLETS_PER_STEP = 3; // droplets at each emission point
+    private static final double HOSE_ANGLE_JITTER = 0.036; // ~2 degrees of nozzle spread, for a wider fan
+    private static final int HOSE_NOZZLE_MIST = 2; // white pressure-mist wisps per tick at the nozzle
 
-            Vec3 point = positionAtTime(origin, direction, speed, t);
-            double spread = SPREAD_NEAR_NOZZLE + (t / flightTime) * (SPREAD_AT_TARGET - SPREAD_NEAR_NOZZLE);
+    // The sprinkler monitor: faster, denser and mistier, so it reads as high pressure next to the hose.
+    private static final int TURRET_SUBSTEPS = 6;
+    private static final int TURRET_DROPLETS_PER_STEP = 4;
+    private static final double TURRET_ANGLE_JITTER = 0.026; // still a touch tighter than the handheld line
+    private static final int TURRET_NOZZLE_MIST = 3;
 
-            for (int d = 0; d < DROPLETS_PER_SAMPLE; d++) {
-                Vec3 droplet = jitterPerpendicular(point, direction, level.random, spread);
-                level.addParticle(ParticleTypes.FALLING_WATER, droplet.x, droplet.y, droplet.z, 0.0, 0.0, 0.0);
-            }
+    public static void emitHoseStream(Level level, Vec3 origin, Vec3 direction, double speed) {
+        emitStream(level, origin, direction, speed, HOSE_SUBSTEPS, HOSE_DROPLETS_PER_STEP, HOSE_ANGLE_JITTER, HOSE_NOZZLE_MIST);
+    }
+
+    public static void emitTurretStream(Level level, Vec3 origin, Vec3 direction, double speed) {
+        emitStream(level, origin, direction, speed, TURRET_SUBSTEPS, TURRET_DROPLETS_PER_STEP, TURRET_ANGLE_JITTER, TURRET_NOZZLE_MIST);
+    }
+
+    private static void emitStream(Level level, Vec3 origin, Vec3 direction, double speed,
+                                   int substeps, int dropletsPerStep, double angleJitter, int nozzleMist) {
+        RandomSource random = level.random;
+        Vec3 dir = direction.normalize();
+        double speedPerTick = speed / 20.0;
+
+        // White aerated spray blasting out of the nozzle - the immediate "this is pressurised" read.
+        for (int i = 0; i < nozzleMist; i++) {
+            Vec3 p = jitterPerpendicular(origin.add(dir.scale(0.1 + random.nextDouble() * 0.35)), dir, random, 0.07);
+            double push = (0.30 + random.nextDouble() * 0.25) * speedPerTick;
+            level.addParticle(ModParticles.WATER_MIST.get(), p.x, p.y, p.z, dir.x * push, dir.y * push, dir.z * push);
         }
 
-        if (impact != null) {
-            level.addParticle(ParticleTypes.SPLASH, impact.x, impact.y, impact.z, 0.0, 0.1, 0.0);
+        for (int s = 0; s < substeps; s++) {
+            // Fractional position within this tick's advance; randomised inside its slot so the rope of
+            // droplets never shows a repeating pattern.
+            double frac = (s + random.nextDouble()) / substeps;
+            for (int d = 0; d < dropletsPerStep; d++) {
+                Vec3 velocity = jitterDirection(dir, random, angleJitter)
+                        .scale((0.97 + random.nextDouble() * 0.06) * speedPerTick);
+                Vec3 p = jitterPerpendicular(origin.add(velocity.scale(frac)), dir, random, 0.03);
+                level.addParticle(ModParticles.WATER_JET.get(), p.x, p.y, p.z, velocity.x, velocity.y, velocity.z);
+            }
         }
     }
 
-    // Turret-specific stream: a much denser, higher-volume high-pressure jet than the handheld hose,
-    // with a thread of misty haze woven through it and a burst of spray at the nozzle so it reads as a
-    // pressurised monitor rather than a garden hose. Same arc as spawnStreamParticles, just far more
-    // particles plus the mist layer.
-    private static final int JET_SAMPLES = 24; // sample points along the arc (vs 14 for the hose)
-    private static final int JET_DROPLETS_PER_SAMPLE = 4; // water droplets per sample (vs 2)
-    private static final double JET_SPREAD_NEAR = 0.03; // tight and cohesive right at the nozzle
-    private static final double JET_SPREAD_FAR = 0.4; // fans out toward the target
-    private static final int JET_MIST_EVERY = 2; // every Nth sample also throws a wisp of mist
-
-    public static void spawnTurretStream(Level level, Vec3 origin, Vec3 direction, double speed, double flightTime, @Nullable Vec3 impact, long animTick) {
-        flightTime = Math.max(flightTime, 0.001);
-        double spacing = flightTime / JET_SAMPLES;
-        double phase = (animTick / 20.0) % spacing;
-        Vec3 dir = direction.normalize();
-
-        // Pressurised burst of mist blowing out of the nozzle.
-        for (int i = 0; i < 4; i++) {
-            Vec3 m = jitterPerpendicular(origin, direction, level.random, 0.12);
-            level.addParticle(ParticleTypes.CLOUD, m.x, m.y, m.z, dir.x * 0.25, dir.y * 0.25, dir.z * 0.25);
-        }
-
-        for (int i = 0; i < JET_SAMPLES; i++) {
-            double t = i * spacing + phase;
-            if (t > flightTime) continue;
-
-            Vec3 point = positionAtTime(origin, direction, speed, t);
-            double frac = t / flightTime;
-            double spread = JET_SPREAD_NEAR + frac * (JET_SPREAD_FAR - JET_SPREAD_NEAR);
-
-            for (int d = 0; d < JET_DROPLETS_PER_SAMPLE; d++) {
-                Vec3 droplet = jitterPerpendicular(point, direction, level.random, spread);
-                level.addParticle(ParticleTypes.FALLING_WATER, droplet.x, droplet.y, droplet.z, 0.0, 0.0, 0.0);
-            }
-
-            // A haze of mist threaded through the jet, drifting along with the stream.
-            if (i % JET_MIST_EVERY == 0) {
-                Vec3 mist = jitterPerpendicular(point, direction, level.random, spread * 1.5);
-                level.addParticle(ParticleTypes.CLOUD, mist.x, mist.y, mist.z, dir.x * 0.05, dir.y * 0.05, dir.z * 0.05);
-            }
-        }
-
-        // A heavier plume where the jet slams into the fire.
-        if (impact != null) {
-            for (int i = 0; i < 5; i++) {
-                level.addParticle(ParticleTypes.SPLASH, impact.x, impact.y, impact.z,
-                        (level.random.nextDouble() - 0.5) * 0.2, 0.15, (level.random.nextDouble() - 0.5) * 0.2);
-            }
-            level.addParticle(ParticleTypes.CLOUD, impact.x, impact.y + 0.1, impact.z, 0.0, 0.06, 0.0);
-        }
+    // Tilts a unit direction by a small random angle (magnitude ~ radians for small values), by nudging
+    // the vector's tip perpendicular to itself and renormalising.
+    public static Vec3 jitterDirection(Vec3 direction, RandomSource random, double magnitude) {
+        return jitterPerpendicular(direction, direction, random, magnitude).normalize();
     }
 
     // Server-side: the 3x3x3 douse pass at the point the stream lands. Identical for the hose and the
     // turret - continuous sizzle/steam every pass, a hiss when the stream first bites, actual cooling
     // gated to COOL_PERIOD (so dousing a block takes real, sustained spray), and a heavier steam column
-    // plus lower hiss the moment a block finally goes out. `ticker` is the caller's own tick counter and
-    // is what paces the cooling cadence.
+    // plus lower hiss the moment a block finally goes out. `ticker` is the level's game time (passes
+    // arrive via WaterDouseQueue): sustained spray delivers a pass every 2 ticks, so accepting a 2-tick
+    // window each COOL_PERIOD cools exactly once per period regardless of what parity the water's
+    // flight time put the arrivals on.
     public static void extinguishAt(ServerLevel serverLevel, BlockPos center, long ticker) {
         boolean playedHiss = false;
         boolean playedDouseBurst = false;
-        boolean coolFireThisPass = ticker % COOL_PERIOD == 0;
+        boolean coolFireThisPass = ticker % COOL_PERIOD < 2;
 
         for (int x = -1; x <= 1; x++) {
             for (int y = -1; y <= 1; y++) {
@@ -286,7 +277,7 @@ public final class WaterStream {
         }
     }
 
-    // Nudges `point` sideways by a small random amount, perpendicular to `direction`, so the hand-placed
+    // Nudges `point` sideways by a small random amount, perpendicular to `direction`, so emitted
     // droplets read as a bit of a spray rather than a perfectly straight line of dots.
     public static Vec3 jitterPerpendicular(Vec3 point, Vec3 direction, RandomSource random, double magnitude) {
         Vec3 up = Math.abs(direction.y) > 0.99 ? new Vec3(1, 0, 0) : new Vec3(0, 1, 0);

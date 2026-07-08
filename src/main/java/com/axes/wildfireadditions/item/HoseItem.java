@@ -1,12 +1,15 @@
 package com.axes.wildfireadditions.item;
 
 import com.axes.wildfireadditions.registry.ModBlocks;
+import com.axes.wildfireadditions.util.WaterDouseQueue;
 import com.axes.wildfireadditions.util.WaterStream;
 import net.minecraft.network.chat.Component;
 import net.minecraft.server.level.ServerLevel;
+import net.minecraft.util.Mth;
 import net.minecraft.world.InteractionHand;
 import net.minecraft.world.InteractionResult;
 import net.minecraft.world.InteractionResultHolder;
+import net.minecraft.world.entity.HumanoidArm;
 import net.minecraft.world.entity.LivingEntity;
 import net.minecraft.world.entity.player.Player;
 import net.minecraft.world.item.Item;
@@ -18,14 +21,23 @@ import net.minecraft.world.phys.Vec3;
 
 public class HoseItem extends Item implements ReducedUseSlowdownItem {
 
-    // A handheld line: modest nozzle speed and reach. A level shot from head height reaches roughly
-    // 10-12 blocks, a shot angled slightly up reaches close to the ~20 block cap, and firing from up
-    // high extends it further - all emergent from simulating the arc (see WaterStream) rather than a
-    // straight ray. The placed sprinkler turret uses the same simulation but a higher-pressure nozzle.
-    private static final double STREAM_SPEED = 22.0; // blocks/second, nozzle exit speed
-    private static final double MAX_RANGE = 20.0; // straight-line distance from the nozzle before the stream dissipates
+    // A handheld line: modest nozzle speed and a pronounced arc. A level shot from head height reaches
+    // roughly 9-10 blocks, a shot angled up reaches the ~22 block ballistic max, and firing from up high
+    // extends it further still - all emergent from simulating the arc (see WaterStream) rather than a
+    // straight ray, and the reach is bounded by how long the water stays airborne, so an elevated shot
+    // douses the fire far below exactly where the droplets land. The placed sprinkler turret uses the
+    // same simulation but a higher-pressure nozzle.
+    private static final double STREAM_SPEED = 19.0; // blocks/second, nozzle exit speed
 
-    private static final int TICK_INTERVAL = 2; // how often onUseTick's logic actually runs
+    private static final int SERVER_TICK_INTERVAL = 2; // how often the server-side trace/douse pass runs
+
+    // How far the visible nozzle sits from the eye: forward along the aim, out toward the hand holding
+    // the hose, and down toward chest height. The droplets fly the same velocity as the server's
+    // eye-origin trace, so the visual stream is simply the authoritative arc shifted by this fixed
+    // offset - well inside the douse's 3x3 area and the fire-hit tolerance.
+    private static final double NOZZLE_FORWARD = 0.4;
+    private static final double NOZZLE_SIDE = 0.25;
+    private static final double NOZZLE_DOWN = 0.22;
 
     public HoseItem(Properties properties) {
         super(properties);
@@ -76,25 +88,39 @@ public class HoseItem extends Item implements ReducedUseSlowdownItem {
     public void onUseTick(Level level, LivingEntity livingEntity, ItemStack stack, int remainingUseDuration) {
         if (!(livingEntity instanceof Player player)) return;
 
-        // Run logic every 2 ticks to balance performance and responsiveness
-        if (player.tickCount % TICK_INTERVAL != 0) return;
-
         Vec3 eyePos = player.getEyePosition();
         Vec3 lookVec = player.getLookAngle();
 
-        // Client-side: draw the stream along the real simulated arc, stopping where it lands.
+        // Client-side, every tick: launch this tick's slug of water from the nozzle. The droplets fly
+        // their own ballistic arcs, collide and splash on their own, so no trace is needed here - and
+        // emitting every tick (rather than every other) is what keeps the rope of water gapless.
         if (level.isClientSide()) {
-            WaterStream.TrajectoryResult trajectory = WaterStream.traceTrajectory(level, player, eyePos, lookVec, STREAM_SPEED, MAX_RANGE);
-            Vec3 impact = trajectory.hitBlock() != null ? trajectory.endPosition() : null;
-            WaterStream.spawnStreamParticles(level, eyePos, lookVec, STREAM_SPEED, trajectory.flightTime(), impact, player.tickCount);
+            WaterStream.emitHoseStream(level, nozzleOrigin(player, eyePos, lookVec), lookVec, STREAM_SPEED);
             return;
         }
 
-        // Server-side: authoritative arc for hit detection, then douse whatever it lands on.
+        // Server-side, every 2 ticks: authoritative arc for hit detection. The douse is scheduled with
+        // the arc's flight time rather than applied immediately, so the fire only starts going out when
+        // the water that just left the nozzle physically gets there - onto whatever fire the arc flew
+        // through, or the surface it landed on.
+        if (player.tickCount % SERVER_TICK_INTERVAL != 0) return;
         ServerLevel serverLevel = (ServerLevel) level;
-        WaterStream.TrajectoryResult trajectory = WaterStream.traceTrajectory(level, player, eyePos, lookVec, STREAM_SPEED, MAX_RANGE);
-        if (trajectory.hitBlock() != null) {
-            WaterStream.extinguishAt(serverLevel, trajectory.hitBlock(), player.tickCount);
+        WaterStream.HoseTrace trace = WaterStream.traceHose(level, player, eyePos, lookVec, STREAM_SPEED);
+        if (trace.douseTarget() != null) {
+            WaterDouseQueue.schedule(serverLevel, trace.douseTarget(), trace.flightTime());
         }
+    }
+
+    // Where the visible stream leaves from: offset from the eye toward whichever hand holds the hose,
+    // so the jet reads as coming out of the held nozzle instead of the player's face.
+    private static Vec3 nozzleOrigin(Player player, Vec3 eyePos, Vec3 lookVec) {
+        boolean rightSide = (player.getUsedItemHand() == InteractionHand.MAIN_HAND)
+                == (player.getMainArm() == HumanoidArm.RIGHT);
+        float yawRad = player.getYRot() * Mth.DEG_TO_RAD;
+        Vec3 right = new Vec3(-Math.cos(yawRad), 0.0, -Math.sin(yawRad));
+        return eyePos
+                .add(lookVec.scale(NOZZLE_FORWARD))
+                .add(right.scale(rightSide ? NOZZLE_SIDE : -NOZZLE_SIDE))
+                .add(0.0, -NOZZLE_DOWN, 0.0);
     }
 }
