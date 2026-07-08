@@ -7,18 +7,24 @@ import net.minecraft.core.BlockPos;
 import net.minecraft.core.component.DataComponents;
 import net.minecraft.nbt.CompoundTag;
 import net.minecraft.network.chat.Component;
+import net.minecraft.tags.BlockTags;
 import net.minecraft.world.effect.MobEffectInstance;
 import net.minecraft.world.effect.MobEffects;
 import net.minecraft.world.entity.player.Player;
 import net.minecraft.world.item.ItemStack;
 import net.minecraft.world.item.component.CustomData;
+import net.minecraft.world.level.BlockGetter;
 import net.minecraft.world.level.ClipContext;
 import net.minecraft.world.level.Level;
+import net.minecraft.world.level.block.state.BlockState;
 import net.minecraft.world.phys.BlockHitResult;
 import net.minecraft.world.phys.HitResult;
 import net.minecraft.world.phys.Vec3;
+import net.minecraft.world.phys.shapes.Shapes;
+import net.minecraft.world.phys.shapes.VoxelShape;
 import net.neoforged.bus.api.SubscribeEvent;
 import net.neoforged.fml.common.EventBusSubscriber;
+import net.neoforged.neoforge.event.entity.player.PlayerEvent;
 import net.neoforged.neoforge.event.tick.PlayerTickEvent;
 
 import java.util.*;
@@ -26,7 +32,10 @@ import java.util.*;
 @EventBusSubscriber(modid = WildfireAdditions.MODID)
 public class HosePhysicsHandler {
 
-    private static final double MAX_HOSE_LENGTH = 50.0;
+    // Also read by the client-side rope simulation so the visual hose runs out of slack at the same
+    // distance the server starts fighting back.
+    public static final double MAX_HOSE_LENGTH = 50.0;
+    public static final double SNAP_SLACK = 6.0; // How far past max length the hose stretches before snapping
     private static final int MAX_NODES = 48; // Safety cap so pathological geometry can't grow the chain forever
     private static final double REJOIN_RADIUS = 1.0; // Standing this close to a kink counts as having retraced past it
     private static final Map<UUID, HoseState> ACTIVE_HOSES = new HashMap<>();
@@ -35,6 +44,15 @@ public class HosePhysicsHandler {
     // Must match the anchor used by HoseRenderHandler so physics and rendering agree on where the hose starts.
     public static Vec3 getPumpAnchor(BlockPos pumpPos) {
         return Vec3.atBottomCenterOf(pumpPos).add(0, 1.0, 0);
+    }
+
+    // The single definition of what the hose can physically catch on. Leaves are excluded: a canopy
+    // overhead must not kink the hose or count towards its taut length (walking under trees used to
+    // snap the visual hose up onto the canopy), and a hose dragged through a bush should slide
+    // through the foliage. Used by both the server's routing raycasts and the client rope's
+    // collision pass so gameplay and visuals never disagree about what is solid.
+    public static boolean blocksHose(BlockState state) {
+        return !state.isAir() && !state.is(BlockTags.LEAVES);
     }
 
     public static class HoseState {
@@ -78,12 +96,21 @@ public class HosePhysicsHandler {
         }
 
         HoseState state = ACTIVE_HOSES.computeIfAbsent(player.getUUID(), k -> new HoseState(pumpPos, player.position()));
+        // The state outlives individual hose items (it's keyed by player), so stowing this hose and
+        // grabbing one from a different pump box must not inherit the old pump's corner chain.
+        if (!state.pumpPos.equals(pumpPos)) {
+            state = new HoseState(pumpPos, player.position());
+            ACTIVE_HOSES.put(player.getUUID(), state);
+        }
         processHosePhysics(player, level, hoseStack, state);
     }
 
-    private static void processHosePhysics(Player player, Level level, ItemStack hoseStack, HoseState state) {
-        int previousNodeCount = state.nodes.size(); // Track to see if we add/remove a corner
+    @SubscribeEvent
+    public static void onPlayerLoggedOut(PlayerEvent.PlayerLoggedOutEvent event) {
+        ACTIVE_HOSES.remove(event.getEntity().getUUID());
+    }
 
+    private static void processHosePhysics(Player player, Level level, ItemStack hoseStack, HoseState state) {
         double totalLength = 0;
         for (int i = 0; i < state.nodes.size() - 1; i++) {
             totalLength += state.nodes.get(i).distanceTo(state.nodes.get(i + 1));
@@ -93,7 +120,7 @@ public class HosePhysicsHandler {
         if (totalLength > MAX_HOSE_LENGTH) {
             player.addEffect(new MobEffectInstance(MobEffects.MOVEMENT_SLOWDOWN, 20, 4, false, false, false));
             player.displayClientMessage(Component.literal("The hose is pulling taut!").withStyle(net.minecraft.ChatFormatting.RED), true);
-            if (totalLength > MAX_HOSE_LENGTH + 6.0) {
+            if (totalLength > MAX_HOSE_LENGTH + SNAP_SLACK) {
                 snapHose(player, hoseStack);
                 return;
             }
@@ -135,23 +162,9 @@ public class HosePhysicsHandler {
             state.nodes.add(snapToGround(level, state.lastValidPlayerPos));
         }
 
-        // IF THE NODES CHANGED, SAVE THEM TO THE ITEM DATA FOR THE RENDERER
-        if (state.nodes.size() != previousNodeCount) {
-            net.minecraft.world.item.component.CustomData customData = hoseStack.get(DataComponents.CUSTOM_DATA);
-            if (customData != null) {
-                CompoundTag tag = customData.copyTag();
-                net.minecraft.nbt.ListTag nodesList = new net.minecraft.nbt.ListTag();
-                for (Vec3 node : state.nodes) {
-                    CompoundTag nodeTag = new CompoundTag();
-                    nodeTag.putDouble("x", node.x);
-                    nodeTag.putDouble("y", node.y);
-                    nodeTag.putDouble("z", node.z);
-                    nodesList.add(nodeTag);
-                }
-                tag.put("HoseNodes", nodesList);
-                hoseStack.set(DataComponents.CUSTOM_DATA, net.minecraft.world.item.component.CustomData.of(tag));
-            }
-        }
+        // Note: the corner chain is intentionally NOT synced to the item/clients. It only exists to
+        // measure the hose's routed length for the taut/snap gameplay above; the visible hose is a
+        // client-side rope simulation (HoseRopeSimulation) that needs nothing but the pump position.
 
         if (player.tickCount % 20 == 0) {
             if (!level.getBlockState(state.pumpPos).is(ModBlocks.PUMP_BOX.get())) {
@@ -252,8 +265,21 @@ public class HosePhysicsHandler {
         Vec3 adjustedFrom = from.add(unit.scale(margin));
         Vec3 adjustedTo = to.subtract(unit.scale(margin));
 
-        HitResult result = level.clip(new ClipContext(adjustedFrom, adjustedTo, ClipContext.Block.COLLIDER, ClipContext.Fluid.NONE, player));
+        HitResult result = level.clip(new HoseClipContext(adjustedFrom, adjustedTo, player));
         return result.getType() == HitResult.Type.BLOCK ? (BlockHitResult) result : null;
+    }
+
+    // The routing raycast the hose lives by: an ordinary COLLIDER clip, except that anything
+    // blocksHose() rules out (leaves) is treated as pure air.
+    private static final class HoseClipContext extends ClipContext {
+        HoseClipContext(Vec3 from, Vec3 to, Player player) {
+            super(from, to, ClipContext.Block.COLLIDER, ClipContext.Fluid.NONE, player);
+        }
+
+        @Override
+        public VoxelShape getBlockShape(BlockState state, BlockGetter level, BlockPos pos) {
+            return blocksHose(state) ? super.getBlockShape(state, level, pos) : Shapes.empty();
+        }
     }
 
     // Pulls a newly placed corner down onto the nearest solid ground beneath it, so the hose rests

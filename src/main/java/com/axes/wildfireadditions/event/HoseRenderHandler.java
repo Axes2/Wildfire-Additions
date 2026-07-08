@@ -1,23 +1,16 @@
 package com.axes.wildfireadditions.event;
 
 import com.axes.wildfireadditions.WildfireAdditions;
-import com.axes.wildfireadditions.item.HoseItem;
+import com.axes.wildfireadditions.client.hose.HoseRopeManager;
+import com.axes.wildfireadditions.client.hose.HoseRopeSimulation;
 import com.mojang.blaze3d.vertex.PoseStack;
 import com.mojang.blaze3d.vertex.VertexConsumer;
 import net.minecraft.client.Minecraft;
-import net.minecraft.client.player.LocalPlayer;
 import net.minecraft.client.renderer.LevelRenderer;
 import net.minecraft.client.renderer.RenderType;
 import net.minecraft.client.renderer.texture.OverlayTexture;
 import net.minecraft.core.BlockPos;
-import net.minecraft.core.component.DataComponents;
-import net.minecraft.nbt.CompoundTag;
-import net.minecraft.nbt.ListTag;
-import net.minecraft.nbt.Tag;
 import net.minecraft.resources.ResourceLocation;
-import net.minecraft.util.Mth;
-import net.minecraft.world.item.ItemStack;
-import net.minecraft.world.item.component.CustomData;
 import net.minecraft.world.level.Level;
 import net.minecraft.world.phys.Vec3;
 import net.neoforged.api.distmarker.Dist;
@@ -27,121 +20,95 @@ import net.neoforged.neoforge.client.event.RenderLevelStageEvent;
 import org.joml.Matrix4f;
 
 import java.util.ArrayList;
+import java.util.Collection;
 import java.util.List;
 
+/**
+ * Draws every active {@link HoseRopeSimulation} as a continuous textured tube. All hose motion -
+ * sag, draping, ground contact - comes from the simulation; this class only smooths the point chain
+ * and extrudes geometry around it. Points are interpolated between the last two simulation ticks, so
+ * the hose moves as fluidly as entities do regardless of frame rate.
+ */
 @EventBusSubscriber(modid = WildfireAdditions.MODID, value = Dist.CLIENT)
 public class HoseRenderHandler {
 
     private static final ResourceLocation HOSE_TEXTURE = ResourceLocation.fromNamespaceAndPath(WildfireAdditions.MODID, "textures/entity/hose.png");
-    private static final float THICKNESS = 0.11f; // Half-width of the hose tube, in blocks
+    // Half-width of the hose tube. Tied to the simulation's collision radius so the rendered surface
+    // sits exactly on the surfaces the physics resolved against - never clipping in, never floating.
+    private static final float THICKNESS = (float) HoseRopeSimulation.RADIUS;
     private static final double TEXTURE_TILE_LENGTH = 1.0; // The hose texture repeats once per block of length
+    // Extra points sampled between each pair of simulation points (Catmull-Rom), so the tube bends
+    // in gentle curves instead of showing the simulation's ~0.5-block segments as facets.
+    private static final int SMOOTHING_SUBDIVISIONS = 2;
 
     @SubscribeEvent
     public static void onRenderLevelStage(RenderLevelStageEvent event) {
         if (event.getStage() != RenderLevelStageEvent.Stage.AFTER_ENTITIES) return;
 
         Minecraft mc = Minecraft.getInstance();
-        LocalPlayer player = mc.player;
-        if (player == null) return;
-
-        ItemStack mainHand = player.getMainHandItem();
-        ItemStack offHand = player.getOffhandItem();
-        ItemStack hoseStack = mainHand.getItem() instanceof HoseItem ? mainHand : (offHand.getItem() instanceof HoseItem ? offHand : null);
-        if (hoseStack == null) return;
-
-        CustomData customData = hoseStack.get(DataComponents.CUSTOM_DATA);
-        if (customData == null || !customData.contains("PumpPos")) return;
-
-        CompoundTag tag = customData.copyTag();
-        if (!tag.getString("PumpDimension").equals(player.level().dimension().location().toString())) return;
-
-        // Build the list of physical nodes
-        List<Vec3> renderNodes = new ArrayList<>();
-        renderNodes.add(HosePhysicsHandler.getPumpAnchor(BlockPos.of(tag.getLong("PumpPos")))); // Start at Pump
-
-        if (tag.contains("HoseNodes")) {
-            ListTag nodesList = tag.getList("HoseNodes", Tag.TAG_COMPOUND);
-            for (int i = 1; i < nodesList.size(); i++) { // Skip index 0 as it's the pump box
-                CompoundTag nodeTag = nodesList.getCompound(i);
-                // Lift corners slightly off the ground to prevent Z-fighting with grass
-                renderNodes.add(new Vec3(nodeTag.getDouble("x"), nodeTag.getDouble("y") + 0.1, nodeTag.getDouble("z")));
-            }
-        }
-
-        // End at player's hand
-        double handOffset = player.getMainArm() == net.minecraft.world.entity.HumanoidArm.RIGHT ? 0.4 : -0.4;
-        Vec3 endPos = player.position().add(
-                -Math.sin(player.yBodyRot * (Math.PI / 180F)) * handOffset,
-                1.0, // Hand height
-                Math.cos(player.yBodyRot * (Math.PI / 180F)) * handOffset
-        );
-        renderNodes.add(endPos);
-
-        // Flatten the corner-to-corner nodes plus the sagging subdivisions of the held segment into
-        // a single continuous point path, so the tube below can share one cross-section ring at every
-        // joint instead of building each segment as its own disconnected box.
-        List<Vec3> path = buildPath(renderNodes, player.level());
-
+        Level level = mc.level;
         PoseStack poseStack = event.getPoseStack();
+        if (level == null || poseStack == null) return;
+
+        Collection<HoseRopeSimulation> ropes = HoseRopeManager.activeRopes();
+        if (ropes.isEmpty()) return;
+
+        float partialTick = event.getPartialTick().getGameTimeDeltaPartialTick(true);
         Vec3 cameraPos = event.getCamera().getPosition();
 
-        // entityCutoutNoCull renders both sides of every quad. The physics-driven corners are only
-        // ever validated as a straight raycast, so at any bend the ring frames can end up wound the
-        // "wrong" way relative to the camera; a culled render type made those faces vanish entirely.
+        // entityCutoutNoCull renders both sides of every quad: at tight bends the rings can wind
+        // "backwards" relative to the camera, and a culled render type made those faces vanish.
         VertexConsumer vertexConsumer = mc.renderBuffers().bufferSource().getBuffer(RenderType.entityCutoutNoCull(HOSE_TEXTURE));
         poseStack.pushPose();
         poseStack.translate(-cameraPos.x, -cameraPos.y, -cameraPos.z);
         Matrix4f matrix = poseStack.last().pose();
 
-        renderTube(vertexConsumer, matrix, player.level(), path);
+        for (HoseRopeSimulation rope : ropes) {
+            renderTube(vertexConsumer, matrix, level, buildPath(rope, partialTick));
+        }
 
         poseStack.popPose();
     }
 
-    private static List<Vec3> buildPath(List<Vec3> macroNodes, Level level) {
-        List<Vec3> path = new ArrayList<>();
-        path.add(macroNodes.get(0));
-
-        for (int i = 0; i < macroNodes.size() - 1; i++) {
-            Vec3 start = macroNodes.get(i);
-            Vec3 end = macroNodes.get(i + 1);
-            boolean isHeldSegment = (i == macroNodes.size() - 2); // Only the piece you're holding sags
-
-            if (!isHeldSegment) {
-                path.add(end);
-                continue;
-            }
-
-            double distance = start.distanceTo(end);
-            double sag = Math.min(distance * 0.1, 1.5);
-            int segments = 12;
-            for (int s = 1; s <= segments; s++) {
-                float t = s / (float) segments;
-                double x = Mth.lerp(t, start.x, end.x);
-                double y = Mth.lerp(t, start.y, end.y) + (4.0 * sag * t * (t - 1.0)); // Parabola
-                double z = Mth.lerp(t, start.z, end.z);
-                // The sag is a purely visual droop that the server-side physics never validates
-                // against terrain, so on its own it can dip straight through a block sitting
-                // beneath the curve. Clamp it back up onto whatever surface is actually there.
-                path.add(clampAboveGround(level, new Vec3(x, y, z)));
-            }
+    private static List<Vec3> buildPath(HoseRopeSimulation rope, float partialTick) {
+        int count = rope.pointCount();
+        List<Vec3> points = new ArrayList<>(count);
+        for (int i = 0; i < count; i++) {
+            points.add(rope.getRenderPoint(i, partialTick));
         }
-        return path;
+        return smoothPath(points);
     }
 
-    // Raises a point up onto the nearest solid surface directly beneath it, if the point would
-    // otherwise sit inside or below that surface. Never pushes a point down - a taut hose sagging
-    // over a gap is left alone.
-    private static Vec3 clampAboveGround(Level level, Vec3 point) {
-        BlockPos columnStart = BlockPos.containing(point.x, point.y + 2.0, point.z);
-        for (int i = 0; i < 8; i++) {
-            BlockPos check = columnStart.below(i);
-            if (!level.getBlockState(check).getCollisionShape(level, check).isEmpty()) {
-                double surfaceY = check.getY() + 1.0;
-                return point.y < surfaceY ? new Vec3(point.x, surfaceY, point.z) : point;
+    // Catmull-Rom subdivision through the simulation points. The curve passes through every original
+    // point, so it never drifts away from what the physics resolved - it only rounds off the corners
+    // between them (deviation is a couple of centimetres at most, well inside the collision skin).
+    private static List<Vec3> smoothPath(List<Vec3> points) {
+        int n = points.size();
+        if (n < 3 || SMOOTHING_SUBDIVISIONS < 1) return points;
+
+        List<Vec3> smoothed = new ArrayList<>((n - 1) * (SMOOTHING_SUBDIVISIONS + 1) + 1);
+        for (int i = 0; i < n - 1; i++) {
+            Vec3 p0 = points.get(Math.max(0, i - 1));
+            Vec3 p1 = points.get(i);
+            Vec3 p2 = points.get(i + 1);
+            Vec3 p3 = points.get(Math.min(n - 1, i + 2));
+
+            smoothed.add(p1);
+            for (int s = 1; s <= SMOOTHING_SUBDIVISIONS; s++) {
+                smoothed.add(catmullRom(p0, p1, p2, p3, s / (float) (SMOOTHING_SUBDIVISIONS + 1)));
             }
         }
-        return point;
+        smoothed.add(points.get(n - 1));
+        return smoothed;
+    }
+
+    private static Vec3 catmullRom(Vec3 p0, Vec3 p1, Vec3 p2, Vec3 p3, float t) {
+        double t2 = t * t;
+        double t3 = t2 * t;
+        return new Vec3(
+                0.5 * (2.0 * p1.x + (p2.x - p0.x) * t + (2.0 * p0.x - 5.0 * p1.x + 4.0 * p2.x - p3.x) * t2 + (3.0 * p1.x - p0.x - 3.0 * p2.x + p3.x) * t3),
+                0.5 * (2.0 * p1.y + (p2.y - p0.y) * t + (2.0 * p0.y - 5.0 * p1.y + 4.0 * p2.y - p3.y) * t2 + (3.0 * p1.y - p0.y - 3.0 * p2.y + p3.y) * t3),
+                0.5 * (2.0 * p1.z + (p2.z - p0.z) * t + (2.0 * p0.z - 5.0 * p1.z + 4.0 * p2.z - p3.z) * t2 + (3.0 * p1.z - p0.z - 3.0 * p2.z + p3.z) * t3));
     }
 
     // Extrudes a single continuous tube along `path`. Cross-section rings are computed per vertex
@@ -161,18 +128,43 @@ public class HoseRenderHandler {
             else if (i == n - 1) tangent = path.get(n - 1).subtract(path.get(n - 2));
             else tangent = path.get(i + 1).subtract(path.get(i - 1));
 
-            if (tangent.lengthSqr() < 1.0E-8) tangent = new Vec3(0, 0, 1);
-            tangent = tangent.normalize();
+            if (tangent.lengthSqr() < 1.0E-8) tangent = i > 0 ? tangents[i - 1] : new Vec3(0, 0, 1);
+            tangents[i] = tangent.normalize();
+        }
 
-            // A shared world-up reference keeps the cross-section from twisting between vertices,
-            // except when the hose runs (near) straight up/down, where that reference is degenerate.
-            Vec3 reference = Math.abs(tangent.y) > 0.99 ? new Vec3(1, 0, 0) : new Vec3(0, 1, 0);
-            Vec3 right = tangent.cross(reference).normalize();
-            Vec3 up = right.cross(tangent).normalize();
+        // Parallel-transport frames: start from a world-up-derived cross-section, then carry it along
+        // the curve by rotating it with the tangent at each step. Unlike re-deriving every frame from
+        // world-up, this cannot suddenly flip 90 degrees when a piled or hanging stretch of hose turns
+        // near-vertical - the ring orientation always changes as gradually as the path itself does.
+        Vec3 reference = Math.abs(tangents[0].y) > 0.99 ? new Vec3(1, 0, 0) : new Vec3(0, 1, 0);
+        rights[0] = tangents[0].cross(reference).normalize();
+        ups[0] = rights[0].cross(tangents[0]).normalize();
 
-            tangents[i] = tangent;
-            rights[i] = right;
-            ups[i] = up;
+        for (int i = 1; i < n; i++) {
+            Vec3 right = rotateAlong(tangents[i - 1], tangents[i], rights[i - 1]);
+            // Numerical drift accumulates over hundreds of points; re-orthogonalize against the tangent.
+            right = right.subtract(tangents[i].scale(right.dot(tangents[i])));
+            if (right.lengthSqr() < 1.0E-8) {
+                Vec3 fallback = Math.abs(tangents[i].y) > 0.99 ? new Vec3(1, 0, 0) : new Vec3(0, 1, 0);
+                right = tangents[i].cross(fallback);
+            }
+            rights[i] = right.normalize();
+            ups[i] = rights[i].cross(tangents[i]).normalize();
+        }
+
+        // Adjacent path points usually share a block (the path is subdivided finer than a block), so
+        // only re-query the light level when the containing block actually changes.
+        int[] lights = new int[n];
+        BlockPos lastLightPos = null;
+        int lastLight = 0;
+        for (int i = 0; i < n; i++) {
+            Vec3 p = path.get(i);
+            BlockPos pos = BlockPos.containing(p.x, p.y, p.z);
+            if (!pos.equals(lastLightPos)) {
+                lastLight = LevelRenderer.getLightColor(level, pos);
+                lastLightPos = pos;
+            }
+            lights[i] = lastLight;
         }
 
         double traveled = 0;
@@ -184,29 +176,41 @@ public class HoseRenderHandler {
             Vec3[] ringA = buildRing(a, rights[i], ups[i]);
             Vec3[] ringB = buildRing(b, rights[i + 1], ups[i + 1]);
 
-            int lightA = sampleLight(level, a);
-            int lightB = sampleLight(level, b);
-
             float vStart = (float) (traveled / TEXTURE_TILE_LENGTH);
             float vEnd = (float) ((traveled + segmentLength) / TEXTURE_TILE_LENGTH);
 
             // The 4 sides of the tube: top, left, bottom, right (relative to this ring's own basis)
-            drawSideQuad(consumer, matrix, ringA[0], ringA[1], ringB[1], ringB[0], ups[i], lightA, lightB, vStart, vEnd);
-            drawSideQuad(consumer, matrix, ringA[1], ringA[2], ringB[2], ringB[1], rights[i].scale(-1), lightA, lightB, vStart, vEnd);
-            drawSideQuad(consumer, matrix, ringA[2], ringA[3], ringB[3], ringB[2], ups[i].scale(-1), lightA, lightB, vStart, vEnd);
-            drawSideQuad(consumer, matrix, ringA[3], ringA[0], ringB[0], ringB[3], rights[i], lightA, lightB, vStart, vEnd);
+            drawSideQuad(consumer, matrix, ringA[0], ringA[1], ringB[1], ringB[0], ups[i], lights[i], lights[i + 1], vStart, vEnd);
+            drawSideQuad(consumer, matrix, ringA[1], ringA[2], ringB[2], ringB[1], rights[i].scale(-1), lights[i], lights[i + 1], vStart, vEnd);
+            drawSideQuad(consumer, matrix, ringA[2], ringA[3], ringB[3], ringB[2], ups[i].scale(-1), lights[i], lights[i + 1], vStart, vEnd);
+            drawSideQuad(consumer, matrix, ringA[3], ringA[0], ringB[0], ringB[3], rights[i], lights[i], lights[i + 1], vStart, vEnd);
 
             traveled += segmentLength;
         }
 
         // Cap both ends so the tube reads as a solid rope instead of an open, hollow pipe.
         Vec3[] startRing = buildRing(path.get(0), rights[0], ups[0]);
-        int startLight = sampleLight(level, path.get(0));
-        drawCap(consumer, matrix, startRing, tangents[0].scale(-1), startLight, true);
+        drawCap(consumer, matrix, startRing, tangents[0].scale(-1), lights[0], true);
 
         Vec3[] endRing = buildRing(path.get(n - 1), rights[n - 1], ups[n - 1]);
-        int endLight = sampleLight(level, path.get(n - 1));
-        drawCap(consumer, matrix, endRing, tangents[n - 1], endLight, false);
+        drawCap(consumer, matrix, endRing, tangents[n - 1], lights[n - 1], false);
+    }
+
+    // Rotates `v` by the same rotation that takes unit vector `fromDir` onto unit vector `toDir`
+    // (Rodrigues' formula) - the parallel-transport step for carrying a ring frame along the curve.
+    private static Vec3 rotateAlong(Vec3 fromDir, Vec3 toDir, Vec3 v) {
+        Vec3 axis = fromDir.cross(toDir);
+        double sin = axis.length();
+        double cos = fromDir.dot(toDir);
+        if (sin < 1.0E-6) {
+            // Collinear tangents: nothing to rotate. (A perfect 180-degree reversal between two
+            // adjacent points can't survive the distance constraints, so it isn't handled specially.)
+            return v;
+        }
+        Vec3 k = axis.scale(1.0 / sin);
+        return v.scale(cos)
+                .add(k.cross(v).scale(sin))
+                .add(k.scale(k.dot(v) * (1.0 - cos)));
     }
 
     private static Vec3[] buildRing(Vec3 center, Vec3 right, Vec3 up) {
@@ -216,10 +220,6 @@ public class HoseRenderHandler {
                 center.add(r).add(u), center.subtract(r).add(u),
                 center.subtract(r).subtract(u), center.add(r).subtract(u)
         };
-    }
-
-    private static int sampleLight(Level level, Vec3 pos) {
-        return LevelRenderer.getLightColor(level, BlockPos.containing(pos.x, pos.y, pos.z));
     }
 
     private static void drawSideQuad(VertexConsumer consumer, Matrix4f matrix, Vec3 ringACorner0, Vec3 ringACorner1,
