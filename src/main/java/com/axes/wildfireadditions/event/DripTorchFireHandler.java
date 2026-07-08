@@ -7,7 +7,6 @@ import dev.protomanly.pmweather.data.DataAttachments;
 import net.minecraft.core.BlockPos;
 import net.minecraft.core.Direction;
 import net.minecraft.core.particles.ParticleTypes;
-import net.minecraft.resources.ResourceKey;
 import net.minecraft.server.level.ServerLevel;
 import net.minecraft.tags.BlockTags;
 import net.minecraft.world.level.ChunkPos;
@@ -17,14 +16,10 @@ import net.minecraft.world.level.chunk.ChunkAccess;
 import net.minecraft.world.level.levelgen.Heightmap;
 import net.neoforged.bus.api.SubscribeEvent;
 import net.neoforged.fml.common.EventBusSubscriber;
-import net.neoforged.neoforge.event.level.LevelEvent;
-import net.neoforged.neoforge.event.server.ServerStoppedEvent;
 import net.neoforged.neoforge.event.tick.LevelTickEvent;
 
 import java.util.ArrayList;
 import java.util.Collections;
-import java.util.HashMap;
-import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 
@@ -169,18 +164,24 @@ public class DripTorchFireHandler {
     private static final int PARTICLE_PERIOD = 3; // Ticks between cosmetic flame bursts.
     private static final float PARTICLE_CHANCE = 0.02f; // Per-ember chance each burst - keeps totals bounded.
 
-    // ember position -> remaining no-fire outward-spread budget. A map (not a set) so each ember can
-    // carry how many more times its lineage may push outward when there's no fire to creep toward.
-    private static final Map<ResourceKey<Level>, Map<BlockPos, Integer>> EMBERS = new HashMap<>();
+    // Tracked embers live in per-dimension SavedData (see DripTorchEmberData): ember position ->
+    // remaining no-fire outward-spread budget. Persisting them is what keeps a backburn recognised as
+    // ours - and therefore still intensity-clamped by PMWFireBlockMixin - across a server restart,
+    // instead of coming back as untracked fire that could spread. It also means there's no static state
+    // to leak or bleed between worlds: the storage is owned by, and dies with, its ServerLevel.
+    private static DripTorchEmberData store(ServerLevel level) {
+        return level.getDataStorage().computeIfAbsent(DripTorchEmberData.FACTORY, DripTorchEmberData.ID);
+    }
 
     /**
      * True if {@code pos} is a drip-torch ember we're actively managing in {@code level}. Read by
      * {@link com.axes.wildfireadditions.mixin.PMWFireBlockMixin} so it only ever clamps <i>our</i>
-     * fire's random-tick intensity, never the wildfire's.
+     * fire's random-tick intensity, never the wildfire's. Only server fire random-ticks, so a
+     * non-server level (no ember storage) is never one of ours.
      */
     public static boolean isTrackedEmber(Level level, BlockPos pos) {
-        Map<BlockPos, Integer> set = EMBERS.get(level.dimension());
-        return set != null && set.containsKey(pos);
+        if (!(level instanceof ServerLevel server)) return false;
+        return store(server).view().containsKey(pos);
     }
 
     // Whether pos's chunk is currently loaded, without forcing it to load. Level.getBlockState
@@ -188,22 +189,6 @@ public class DripTorchFireHandler {
     // unloaded chunk back in; callers use this to leave dormant embers untouched instead.
     private static boolean isLoaded(ServerLevel level, BlockPos pos) {
         return level.hasChunk(pos.getX() >> 4, pos.getZ() >> 4);
-    }
-
-    // Drop a dimension's tracked embers when it unloads (e.g. quitting a single-player world), so stale
-    // positions can't bleed into the next world loaded in the same JVM and be mistaken for live embers.
-    @SubscribeEvent
-    public static void onLevelUnload(LevelEvent.Unload event) {
-        if (event.getLevel() instanceof ServerLevel level) {
-            EMBERS.remove(level.dimension());
-        }
-    }
-
-    // Belt-and-braces: clear everything on shutdown, matching WaterDouseQueue, in case a dimension
-    // wasn't individually unloaded first.
-    @SubscribeEvent
-    public static void onServerStopped(ServerStoppedEvent event) {
-        EMBERS.clear();
     }
 
     /**
@@ -219,7 +204,8 @@ public class DripTorchFireHandler {
 
     private static boolean plantEmber(ServerLevel level, BlockPos pos, int spreadBudget) {
         pos = pos.immutable();
-        Map<BlockPos, Integer> set = EMBERS.computeIfAbsent(level.dimension(), k -> new LinkedHashMap<>());
+        DripTorchEmberData data = store(level);
+        Map<BlockPos, Integer> set = data.view();
         if (set.size() >= MAX_EMBERS) return false;
 
         // Never overwrite existing fire - that includes our own embers, but critically also the
@@ -248,6 +234,7 @@ public class DripTorchFireHandler {
         BlockState fire = ModBlocks.FIRE.get().defaultBlockState().setValue(PMWFireBlock.INTENSITY, START_INTENSITY);
         level.setBlockAndUpdate(pos, fire);
         set.put(pos, spreadBudget);
+        data.setDirty();
         return true;
     }
 
@@ -259,18 +246,19 @@ public class DripTorchFireHandler {
     public static void onLevelTick(LevelTickEvent.Post event) {
         if (event.getLevel().isClientSide()) return;
         ServerLevel level = (ServerLevel) event.getLevel();
-        Map<BlockPos, Integer> set = EMBERS.get(level.dimension());
-        if (set == null || set.isEmpty()) return;
+        DripTorchEmberData data = store(level);
+        Map<BlockPos, Integer> set = data.view();
+        if (set.isEmpty()) return;
 
         long time = level.getGameTime();
         if (time % CLAMP_PERIOD == 0) {
-            clampIntensity(level, set);
+            clampIntensity(level, data);
         }
         if (time % PARTICLE_PERIOD == 0) {
             emitEmberParticles(level, set);
         }
         if (time % CREEP_PERIOD == 0) {
-            creepTowardFire(level, set);
+            creepTowardFire(level, data);
         }
     }
 
@@ -278,7 +266,8 @@ public class DripTorchFireHandler {
     // guarantees an ember's randomTick never computes above the cap, so this pass is defensive - it
     // resets the stored value between game ticks - but its load-bearing job is pruning: an ember whose
     // block is no longer fire has burned out and leaves the set here.
-    private static void clampIntensity(ServerLevel level, Map<BlockPos, Integer> set) {
+    private static void clampIntensity(ServerLevel level, DripTorchEmberData data) {
+        Map<BlockPos, Integer> set = data.view();
         List<BlockPos> toRemove = new ArrayList<>();
 
         for (BlockPos pos : set.keySet()) {
@@ -302,6 +291,7 @@ public class DripTorchFireHandler {
         for (BlockPos pos : toRemove) {
             set.remove(pos);
         }
+        if (!toRemove.isEmpty()) data.setDirty();
     }
 
     // Cosmetic only. The fire block is capped at a low intensity for safety (see class doc), so
@@ -329,7 +319,8 @@ public class DripTorchFireHandler {
     // bounded outward foliage-clearing spread (see spreadOutward). The frontier is shuffled before the
     // budget is applied so a large tracked set advances as one even front rather than a few embers
     // monopolising every pass.
-    private static void creepTowardFire(ServerLevel level, Map<BlockPos, Integer> set) {
+    private static void creepTowardFire(ServerLevel level, DripTorchEmberData data) {
+        Map<BlockPos, Integer> set = data.view();
         if (set.size() >= MAX_EMBERS) return;
 
         // The idle outward clear runs on a slower cadence than the toward-fire creep (see
@@ -373,6 +364,7 @@ public class DripTorchFireHandler {
             attempts++;
             spreadOutward(level, set, ember, budget);
             set.put(ember, SPENT);
+            data.setDirty();
         }
     }
 
