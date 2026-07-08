@@ -1,6 +1,7 @@
 package com.axes.wildfireadditions.registry;
 
 import com.axes.wildfireadditions.WildfireAdditions;
+import com.axes.wildfireadditions.config.WildfireConfig;
 import com.axes.wildfireadditions.item.AircraftTankItem;
 import com.axes.wildfireadditions.item.DripTorchItem;
 import com.axes.wildfireadditions.item.FireRetardantBucketItem;
@@ -27,7 +28,7 @@ public class ModItems {
             () -> new DripTorchItem(new Item.Properties().stacksTo(1)));
 
     public static final DeferredItem<Item> RETARDANT_SPRAYER = ITEMS.register("retardant_sprayer",
-            () -> new RetardantSprayerItem(new Item.Properties().durability(RetardantSprayerItem.DURABILITY)));
+            () -> new RetardantSprayerItem(new Item.Properties().durability(WildfireConfig.sprayerDurability())));
 
     // A bucket of fire-retardant slurry (water bucket + 2 magma cream); loads a tank with retardant. Stacks
     // to one like a filled bucket, so filling a tank takes three separate buckets.

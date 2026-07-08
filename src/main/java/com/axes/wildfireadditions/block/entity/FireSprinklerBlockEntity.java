@@ -1,6 +1,7 @@
 package com.axes.wildfireadditions.block.entity;
 
 import com.axes.wildfireadditions.block.FireSprinklerBlock;
+import com.axes.wildfireadditions.config.WildfireConfig;
 import com.axes.wildfireadditions.registry.ModBlockEntities;
 import com.axes.wildfireadditions.util.WaterDouseQueue;
 import com.axes.wildfireadditions.util.WaterStream;
@@ -51,7 +52,9 @@ public class FireSprinklerBlockEntity extends BlockEntity {
     // The nozzle sits at the centre of the head, 24px (1.5 blocks) up from the bottom of the model.
     private static final double NOZZLE_HEIGHT = 24.0 / 16.0;
 
-    private static final int SCAN_RANGE = 26; // horizontal detection radius, in blocks (inside ballistic reach)
+    // Default horizontal detection radius, in blocks (inside ballistic reach); live value is
+    // WildfireConfig.sprinklerScanRange().
+    private static final int SCAN_RANGE = 26;
     private static final int VERTICAL_RANGE = 12; // vertical detection reach, in blocks
 
     private static final int RETARGET_PERIOD = 20; // reacquire the closest fire twice a second, so the turret always tracks the nearest flame
@@ -181,10 +184,11 @@ public class FireSprinklerBlockEntity extends BlockEntity {
         Vec3 origin = nozzleOrigin();
         List<BlockPos> candidates = new ArrayList<>();
         BlockPos.MutableBlockPos m = new BlockPos.MutableBlockPos();
-        long rangeSq = (long) SCAN_RANGE * SCAN_RANGE;
+        int scanRange = WildfireConfig.sprinklerScanRange();
+        long rangeSq = (long) scanRange * scanRange;
 
-        for (int dx = -SCAN_RANGE; dx <= SCAN_RANGE; dx++) {
-            for (int dz = -SCAN_RANGE; dz <= SCAN_RANGE; dz++) {
+        for (int dx = -scanRange; dx <= scanRange; dx++) {
+            for (int dz = -scanRange; dz <= scanRange; dz++) {
                 if ((long) dx * dx + (long) dz * dz > rangeSq) continue; // keep the horizontal reach circular
                 for (int dy = -VERTICAL_RANGE; dy <= VERTICAL_RANGE; dy++) {
                     m.set(worldPosition.getX() + dx, worldPosition.getY() + dy, worldPosition.getZ() + dz);

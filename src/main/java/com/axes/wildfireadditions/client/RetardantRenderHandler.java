@@ -2,6 +2,7 @@ package com.axes.wildfireadditions.client;
 
 import com.axes.wildfireadditions.WildfireAdditions;
 import com.axes.wildfireadditions.coating.ClientCoatingStore;
+import com.axes.wildfireadditions.config.WildfireConfig;
 import com.mojang.blaze3d.vertex.PoseStack;
 import com.mojang.blaze3d.vertex.VertexConsumer;
 import net.minecraft.client.Minecraft;
@@ -123,7 +124,7 @@ public final class RetardantRenderHandler {
         BlockRenderDispatcher dispatcher = mc.getBlockRenderer();
         RandomSource random = RandomSource.create();
 
-        int[] budget = {MAX_MODELS};
+        int[] budget = {WildfireConfig.maxRetardantOverlayModels()};
         BlockPos.MutableBlockPos cursor = new BlockPos.MutableBlockPos();
         ClientCoatingStore.forEachCoating(now, packedPos -> {
             if (budget[0] <= 0) return;
@@ -132,7 +133,7 @@ public final class RetardantRenderHandler {
             double dx = cursor.getX() + 0.5 - cam.x;
             double dy = cursor.getY() + 0.5 - cam.y;
             double dz = cursor.getZ() + 0.5 - cam.z;
-            if (dx * dx + dy * dy + dz * dz > MAX_RENDER_DIST_SQR) return;
+            if (dx * dx + dy * dy + dz * dz > WildfireConfig.retardantOverlayRenderDistanceSqr()) return;
 
             BlockState state = level.getBlockState(cursor);
             // Only blocks with a baked block model. A coated block that's since been broken (or was a

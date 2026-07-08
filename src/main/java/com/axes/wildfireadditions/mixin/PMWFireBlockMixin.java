@@ -1,6 +1,7 @@
 package com.axes.wildfireadditions.mixin;
 
 import com.axes.wildfireadditions.coating.RetardantCoating;
+import com.axes.wildfireadditions.config.WildfireConfig;
 import com.axes.wildfireadditions.event.DripTorchFireHandler;
 import com.axes.wildfireadditions.event.RetardantFireHandler;
 import dev.protomanly.pmweather.block.PMWFireBlock;
@@ -46,7 +47,7 @@ public class PMWFireBlockMixin {
     @Inject(method = "canBurnOn", at = @At("HEAD"), cancellable = true, remap = false)
     private static void wildfireadditions$vetoCoated(Level level, BlockState state, BlockPos pos,
                                                      int intensity, CallbackInfoReturnable<Boolean> cir) {
-        if (intensity < RetardantFireHandler.REQUIRED_INTENSITY && RetardantCoating.isCoated(level, pos)) {
+        if (intensity < WildfireConfig.coatingBreakthroughIntensity() && RetardantCoating.isCoated(level, pos)) {
             cir.setReturnValue(false);
         }
     }
