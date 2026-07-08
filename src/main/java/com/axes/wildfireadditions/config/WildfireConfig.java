@@ -210,7 +210,7 @@ public final class WildfireConfig {
             sprinklerScanRangeBlocks = builder
                     .comment("Horizontal radius the fire sprinkler turret hunts for fire within, in blocks.",
                             "Kept inside the nozzle's ballistic reach (~27) by default so every target it",
-                            "picks is actually hittable; raising it much past that finds fires it can't reach.",
+                            "picks is actually hittable; raising it much past that may target fires it can't reach.",
                             "Default 26.")
                     .defineInRange("sprinklerScanRangeBlocks", 26, 1, 64);
             builder.pop();
