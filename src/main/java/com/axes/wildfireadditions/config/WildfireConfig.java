@@ -165,20 +165,20 @@ public final class WildfireConfig {
             builder.push("coating");
             coatingLifetimeTicks = builder
                     .comment("How long a retardant coating lasts, in ticks (20 ticks = 1 second).",
-                            "Default 12000 = 10 real minutes.")
+                            "Default 12000 = 10 minutes.")
                     .defineInRange("coatingLifetimeTicks", 12000, 20, 1_728_000);
             coatingBreakthroughIntensity = builder
                     .comment("Fire intensity a blaze must reach to burn through a coated block.",
                             "PMWeather fire intensity runs 1-10. Higher = more fireproof: 10 means only the",
                             "very fiercest infernos ever break a coating, 1 means the coating barely helps.",
-                            "Default 9 ('practically fireproof, but the worst infernos still win').")
+                            "Default 9 ('practically fireproof').")
                     .defineInRange("coatingBreakthroughIntensity", 9, 1, 10);
             builder.pop();
 
             builder.push("sprayer");
             sprayerRefillPercentPerMagmaCream = builder
                     .comment("Percent of the sprayer's full charge restored per Magma Cream when refilling",
-                            "it in a crafting grid. (Anvil refills follow vanilla's own repair maths.)",
+                            "it in a crafting grid.",
                             "Default 25.")
                     .defineInRange("sprayerRefillPercentPerMagmaCream", 25, 1, 100);
             builder.pop();
@@ -186,7 +186,7 @@ public final class WildfireConfig {
             builder.push("hose");
             maxHoseLengthBlocks = builder
                     .comment("How far the fire hose can be routed from its pump box before it pulls taut and",
-                            "slows the player, in blocks. The client-side hose visual obeys the same value.",
+                            "slows the player, in blocks.",
                             "Default 50.")
                     .defineInRange("maxHoseLengthBlocks", 50.0, 4.0, 512.0);
             hoseSnapSlackBlocks = builder
@@ -216,10 +216,7 @@ public final class WildfireConfig {
             builder.pop();
 
             // WARNING attached to the drip_torch section header: the intensity cap is intentionally absent.
-            builder.comment("Drip torch backburn tuning.",
-                            "NOTE: the ember intensity cap is deliberately NOT configurable - it is fixed at 1",
-                            "and is what guarantees a controlled burn can never turn into a wildfire. Only the",
-                            "performance ceiling and idle-clearing size are exposed.")
+            builder.comment("Drip torch backburn tuning.")
                     .push("drip_torch");
             maxTrackedEmbers = builder
                     .comment("SERVER PERFORMANCE CAP: the most drip-torch embers tracked at once per",
@@ -256,14 +253,12 @@ public final class WildfireConfig {
         public final ModConfigSpec.IntValue maxRetardantOverlayModels;
 
         Client(ModConfigSpec.Builder builder) {
-            builder.comment("Wildfire Additions - client-only look & feel. Local to you; never affects",
-                    "other players or the server.");
+            builder.comment("Wildfire Additions - client-only");
 
             builder.push("feel");
             useMovementMultiplier = builder
                     .comment("Walk-speed multiplier while holding-to-use a field tool (drip torch, sprayer,",
-                            "hose). Vanilla clamps item use to 0.2 (a fifth of walking speed); this replaces",
-                            "that for our tools only. 1.0 = full speed, 0.2 = vanilla crawl. Default 0.5.")
+                            "hose).")
                     .defineInRange("useMovementMultiplier", 0.5, 0.05, 1.0);
             builder.pop();
 
@@ -288,9 +283,7 @@ public final class WildfireConfig {
             builder.push("sprayer");
             sprayerDurability = builder
                     .comment("The retardant sprayer's full charge pool: one point is spent per new block it",
-                            "coats, and it never breaks - it just stops until refilled with Magma Cream.",
-                            "Baked into the item, so a change takes effect on the next game launch.",
-                            "Default 256.")
+                            "coats")
                     .defineInRange("sprayerDurability", 256, 1, 100_000);
             builder.pop();
         }
