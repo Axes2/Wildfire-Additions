@@ -3,25 +3,25 @@
 	"textures": {
 		"layer0": "wildfireadditions:item/hose"
 	},
-	"__comment": "The held pose while the hose is actively spraying. Same flat sprite as hose.json, but the held display transforms pitch the model ~90 degrees forward so the nozzle points down the player's aim instead of up/sideways - that's what makes the stream read as leaving the nozzle tip. Only the held transforms are overridden; ground/gui/head fall through to item/generated. The X-rotation is the 'forward' pitch; nudge these rotation/translation values a few units in-game to line the nozzle up exactly.",
+	"__comment": "The held pose while the hose is actively spraying. Same flat sprite as hose.json, but the held display transforms pitch the model ~90 degrees forward so the nozzle points down the player's aim instead of up/sideways - that's what makes the stream read as leaving the nozzle tip. Only the held transforms are overridden; ground/gui/head fall through to item/generated. The X-rotation is the 'forward' pitch (-90 points the nozzle down-range; +90 flips it back toward the player); nudge these rotation/translation values a few units in-game to line the nozzle up exactly.",
 	"display": {
 		"thirdperson_righthand": {
-			"rotation": [ 90, 0, 0 ],
+			"rotation": [ -90, 0, 0 ],
 			"translation": [ 0, 4.5, 1.5 ],
 			"scale": [ 0.55, 0.55, 0.55 ]
 		},
 		"thirdperson_lefthand": {
-			"rotation": [ 90, 0, 0 ],
+			"rotation": [ -90, 0, 0 ],
 			"translation": [ 0, 4.5, 1.5 ],
 			"scale": [ 0.55, 0.55, 0.55 ]
 		},
 		"firstperson_righthand": {
-			"rotation": [ 90, -90, 25 ],
+			"rotation": [ -90, -90, 25 ],
 			"translation": [ 1.13, 4.0, 1.13 ],
 			"scale": [ 0.68, 0.68, 0.68 ]
 		},
 		"firstperson_lefthand": {
-			"rotation": [ 90, 90, -25 ],
+			"rotation": [ -90, 90, -25 ],
 			"translation": [ 1.13, 4.0, 1.13 ],
 			"scale": [ 0.68, 0.68, 0.68 ]
 		}
