@@ -62,7 +62,7 @@ public class RetardantSprayerItem extends Item implements ReducedUseSlowdownItem
     // sprayer (forward along the aim, out to the hand's side, and down toward chest height) so the mist
     // reads as coming out of the held nozzle instead of the player's face. Purely cosmetic - the coating
     // raycast still fires from the eye, so the offset only moves where the dust appears to originate.
-    private static final double NOZZLE_FORWARD = 0.6;
+    private static final double NOZZLE_FORWARD = 0.3;
     private static final double NOZZLE_SIDE = 0.33;
     private static final double NOZZLE_DOWN = 0.1;
 
