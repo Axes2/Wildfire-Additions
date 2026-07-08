@@ -17,6 +17,8 @@ import net.minecraft.world.level.chunk.ChunkAccess;
 import net.minecraft.world.level.levelgen.Heightmap;
 import net.neoforged.bus.api.SubscribeEvent;
 import net.neoforged.fml.common.EventBusSubscriber;
+import net.neoforged.neoforge.event.level.LevelEvent;
+import net.neoforged.neoforge.event.server.ServerStoppedEvent;
 import net.neoforged.neoforge.event.tick.LevelTickEvent;
 
 import java.util.ArrayList;
@@ -181,6 +183,29 @@ public class DripTorchFireHandler {
         return set != null && set.containsKey(pos);
     }
 
+    // Whether pos's chunk is currently loaded, without forcing it to load. Level.getBlockState
+    // resolves through getChunk(..., create=true), so every unguarded read here would drag an
+    // unloaded chunk back in; callers use this to leave dormant embers untouched instead.
+    private static boolean isLoaded(ServerLevel level, BlockPos pos) {
+        return level.hasChunk(pos.getX() >> 4, pos.getZ() >> 4);
+    }
+
+    // Drop a dimension's tracked embers when it unloads (e.g. quitting a single-player world), so stale
+    // positions can't bleed into the next world loaded in the same JVM and be mistaken for live embers.
+    @SubscribeEvent
+    public static void onLevelUnload(LevelEvent.Unload event) {
+        if (event.getLevel() instanceof ServerLevel level) {
+            EMBERS.remove(level.dimension());
+        }
+    }
+
+    // Belt-and-braces: clear everything on shutdown, matching WaterDouseQueue, in case a dimension
+    // wasn't individually unloaded first.
+    @SubscribeEvent
+    public static void onServerStopped(ServerStoppedEvent event) {
+        EMBERS.clear();
+    }
+
     /**
      * Places a capped ember at {@code pos} (if the spot is valid) and starts tracking it, giving it a
      * fresh randomised no-fire spread budget. Called both by the drip torch when the player lights the
@@ -257,6 +282,11 @@ public class DripTorchFireHandler {
         List<BlockPos> toRemove = new ArrayList<>();
 
         for (BlockPos pos : set.keySet()) {
+            // Never force-load a chunk just to check an ember. An ember in an unloaded chunk is dormant:
+            // leave it tracked and re-check it once its chunk loads again (matching RetardantFireHandler),
+            // rather than pulling the chunk back in every tick - which would pin abandoned backburns loaded
+            // and, because such chunks don't random-tick, keep those embers alive forever.
+            if (!isLoaded(level, pos)) continue;
             BlockState state = level.getBlockState(pos);
             if (!(state.getBlock() instanceof PMWFireBlock)) {
                 toRemove.add(pos); // Burned out or consumed - nothing left to manage.
@@ -282,6 +312,7 @@ public class DripTorchFireHandler {
     // just the RNG roll.
     private static void emitEmberParticles(ServerLevel level, Map<BlockPos, Integer> set) {
         for (BlockPos pos : set.keySet()) {
+            if (!isLoaded(level, pos)) continue; // No viewers near a dormant ember; nothing to show.
             if (level.random.nextFloat() >= PARTICLE_CHANCE) continue;
             double x = pos.getX() + 0.5, y = pos.getY() + 0.15, z = pos.getZ() + 0.5;
             level.sendParticles(ParticleTypes.FLAME, x, y, z, 2, 0.22, 0.08, 0.22, 0.01);
@@ -312,6 +343,9 @@ public class DripTorchFireHandler {
 
         for (BlockPos ember : frontier) {
             if (attempts >= CREEP_BUDGET || set.size() >= MAX_EMBERS) break;
+            // Skip embers whose chunk is unloaded - creeping from one would force-load it (and the
+            // chunks its fire/ground scan reaches into) purely to advance a fire nobody is watching.
+            if (!isLoaded(level, ember)) continue;
 
             BlockPos fineTarget = findNearestWildfire(level, set, ember);
             if (fineTarget != null) {
@@ -387,6 +421,7 @@ public class DripTorchFireHandler {
             for (int dz = -FINE_SCAN_RADIUS; dz <= FINE_SCAN_RADIUS; dz++) {
                 for (int dy = -FINE_SCAN_VERTICAL; dy <= FINE_SCAN_VERTICAL; dy++) {
                     m.set(origin.getX() + dx, origin.getY() + dy, origin.getZ() + dz);
+                    if (!isLoaded(level, m)) continue; // Don't force-load a neighbour chunk to scan it.
                     if (!(level.getBlockState(m).getBlock() instanceof PMWFireBlock)) continue;
                     if (set.containsKey(m)) continue; // One of ours, not the wildfire.
 
