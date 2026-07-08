@@ -85,7 +85,7 @@ public class HoseItem extends Item implements ReducedUseSlowdownItem {
 
     @Override
     public boolean shouldCauseReequipAnimation(ItemStack oldStack, ItemStack newStack, boolean slotChanged) {
-        // Prevents the item from bobbing when we update the physics nodes in the background
+        // Never bob the held hose over component-data changes - only over an actual item swap
         return oldStack.getItem() != newStack.getItem();
     }
 
