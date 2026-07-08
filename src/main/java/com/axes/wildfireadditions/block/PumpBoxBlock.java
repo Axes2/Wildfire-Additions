@@ -44,11 +44,14 @@ public class PumpBoxBlock extends Block implements EntityBlock {
 // Apply it to the item
                     hoseStack.set(DataComponents.CUSTOM_DATA, CustomData.of(tag));
 
-                    // Hand hose to player or drop it
+                    // Hand the hose to the player. It can't be dropped on the ground (loose hoses are
+                    // cleaned up), so if there's nowhere to put it, refuse rather than hand out a hose
+                    // that would immediately vanish.
                     if (player.getMainHandItem().isEmpty()) {
                         player.setItemInHand(net.minecraft.world.InteractionHand.MAIN_HAND, hoseStack);
                     } else if (!player.getInventory().add(hoseStack)) {
-                        player.drop(hoseStack, false);
+                        player.displayClientMessage(Component.literal("Make room in your inventory to connect the hose."), true);
+                        return InteractionResult.FAIL;
                     }
 
                     player.displayClientMessage(Component.literal("Hose connected and pressurized."), true);
