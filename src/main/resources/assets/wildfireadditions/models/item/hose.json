@@ -2,5 +2,13 @@
 	"parent": "minecraft:item/generated",
 	"textures": {
 		"layer0": "wildfireadditions:item/hose"
-	}
+	},
+	"overrides": [
+		{
+			"predicate": {
+				"wildfireadditions:spraying": 1
+			},
+			"model": "wildfireadditions:item/hose_spraying"
+		}
+	]
 }

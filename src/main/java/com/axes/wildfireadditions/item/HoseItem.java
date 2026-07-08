@@ -34,10 +34,12 @@ public class HoseItem extends Item implements ReducedUseSlowdownItem {
     // How far the visible nozzle sits from the eye: forward along the aim, out toward the hand holding
     // the hose, and down toward chest height. The droplets fly the same velocity as the server's
     // eye-origin trace, so the visual stream is simply the authoritative arc shifted by this fixed
-    // offset - well inside the douse's 3x3 area and the fire-hit tolerance.
-    private static final double NOZZLE_FORWARD = 0.4;
-    private static final double NOZZLE_SIDE = 0.25;
-    private static final double NOZZLE_DOWN = 0.22;
+    // offset - well inside the douse's 3x3 area and the fire-hit tolerance. Pushed a little further
+    // forward and tucked in toward the aim now that the spraying model (hose_spraying.json) pitches the
+    // nozzle forward, so the stream reads as leaving the nozzle tip rather than a point beside the hand.
+    private static final double NOZZLE_FORWARD = 0.6;
+    private static final double NOZZLE_SIDE = 0.18;
+    private static final double NOZZLE_DOWN = 0.2;
 
     public HoseItem(Properties properties) {
         super(properties);
