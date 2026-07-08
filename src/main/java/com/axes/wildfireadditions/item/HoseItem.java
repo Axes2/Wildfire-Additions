@@ -64,7 +64,11 @@ public class HoseItem extends Item implements ReducedUseSlowdownItem {
         if (player != null && player.isSecondaryUseActive()
                 && level.getBlockState(context.getClickedPos()).is(ModBlocks.PUMP_BOX.get())) {
             if (!level.isClientSide()) {
-                context.getItemInHand().shrink(1);
+                // Empty the hand slot outright rather than shrink(): in creative the interaction
+                // pipeline saves the held stack's count before useOn and restores it afterward, which
+                // would silently undo a shrink and leave the hose stuck in hand. Replacing the slot
+                // makes that restore land on an orphaned stack, so the hose detaches in every mode.
+                player.setItemInHand(context.getHand(), ItemStack.EMPTY);
                 player.displayClientMessage(Component.literal("Hose stowed back in the pump box."), true);
             }
             return InteractionResult.sidedSuccess(level.isClientSide());
