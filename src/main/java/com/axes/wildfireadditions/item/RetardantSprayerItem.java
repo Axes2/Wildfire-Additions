@@ -7,8 +7,10 @@ import net.minecraft.core.particles.DustParticleOptions;
 import net.minecraft.server.level.ServerLevel;
 import net.minecraft.sounds.SoundEvents;
 import net.minecraft.sounds.SoundSource;
+import net.minecraft.util.Mth;
 import net.minecraft.world.InteractionHand;
 import net.minecraft.world.InteractionResultHolder;
+import net.minecraft.world.entity.HumanoidArm;
 import net.minecraft.world.entity.LivingEntity;
 import net.minecraft.world.entity.player.Player;
 import net.minecraft.world.item.Item;
@@ -55,6 +57,14 @@ public class RetardantSprayerItem extends Item implements ReducedUseSlowdownItem
     private static final double RANGE = 6.0; // How far the spray reaches, in blocks.
     private static final int SPRAY_INTERVAL = 4; // Ticks between coating passes (and durability drain).
     private static final int PARTICLE_INTERVAL = 2; // Ticks between cosmetic dust bursts.
+
+    // Where the visible retardant cone leaves from: offset from the eye toward the hand holding the
+    // sprayer (forward along the aim, out to the hand's side, and down toward chest height) so the mist
+    // reads as coming out of the held nozzle instead of the player's face. Purely cosmetic - the coating
+    // raycast still fires from the eye, so the offset only moves where the dust appears to originate.
+    private static final double NOZZLE_FORWARD = 0.3;
+    private static final double NOZZLE_SIDE = 0.33;
+    private static final double NOZZLE_DOWN = 0.1;
 
     public RetardantSprayerItem(Properties properties) {
         super(properties);
@@ -105,7 +115,11 @@ public class RetardantSprayerItem extends Item implements ReducedUseSlowdownItem
         ServerLevel serverLevel = (ServerLevel) level;
 
         if (player.tickCount % PARTICLE_INTERVAL == 0) {
-            emitSprayCone(serverLevel, eye, look, reach);
+            // Draw the cone from the held nozzle to where the spray actually lands, so shifting the
+            // origin off the eye doesn't overshoot the surface the coating raycast stopped at.
+            Vec3 nozzle = nozzleOrigin(player, eye, look);
+            double nozzleReach = hasHit ? Math.max(0.2, hit.getLocation().distanceTo(nozzle)) : reach;
+            emitSprayCone(serverLevel, nozzle, look, nozzleReach);
         }
 
         if (!hasHit || player.tickCount % SPRAY_INTERVAL != 0) return;
@@ -169,6 +183,20 @@ public class RetardantSprayerItem extends Item implements ReducedUseSlowdownItem
     // this point; it just stops working until topped up with Magma Cream.
     public static boolean isEmpty(ItemStack stack) {
         return stack.getDamageValue() >= stack.getMaxDamage();
+    }
+
+    // Where the visible cone leaves from: offset from the eye toward whichever hand holds the sprayer,
+    // so the mist reads as coming out of the held nozzle instead of the player's face. Matches the fire
+    // hose's nozzle offset.
+    private static Vec3 nozzleOrigin(Player player, Vec3 eyePos, Vec3 lookVec) {
+        boolean rightSide = (player.getUsedItemHand() == InteractionHand.MAIN_HAND)
+                == (player.getMainArm() == HumanoidArm.RIGHT);
+        float yawRad = player.getYRot() * Mth.DEG_TO_RAD;
+        Vec3 right = new Vec3(-Math.cos(yawRad), 0.0, -Math.sin(yawRad));
+        return eyePos
+                .add(lookVec.scale(NOZZLE_FORWARD))
+                .add(right.scale(rightSide ? NOZZLE_SIDE : -NOZZLE_SIDE))
+                .add(0.0, -NOZZLE_DOWN, 0.0);
     }
 
     // A dense cone of red retardant dust from the nozzle out to where the spray lands, widening with
