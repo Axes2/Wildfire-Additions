@@ -38,8 +38,8 @@ public class HoseItem extends Item implements ReducedUseSlowdownItem {
     // forward and tucked in toward the aim now that the spraying model (hose_spraying.json) pitches the
     // nozzle forward, so the stream reads as leaving the nozzle tip rather than a point beside the hand.
     private static final double NOZZLE_FORWARD = 0.6;
-    private static final double NOZZLE_SIDE = 0.18;
-    private static final double NOZZLE_DOWN = 0.2;
+    private static final double NOZZLE_SIDE = 0.33;
+    private static final double NOZZLE_DOWN = 0.1;
 
     public HoseItem(Properties properties) {
         super(properties);
