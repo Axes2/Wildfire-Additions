@@ -3,6 +3,7 @@ package com.axes.wildfireadditions.client.hose;
 import com.axes.wildfireadditions.event.HosePhysicsHandler;
 import net.minecraft.core.BlockPos;
 import net.minecraft.util.Mth;
+import net.minecraft.world.entity.player.Player;
 import net.minecraft.world.level.Level;
 import net.minecraft.world.level.block.state.BlockState;
 import net.minecraft.world.phys.AABB;
@@ -101,8 +102,11 @@ public final class HoseRopeSimulation {
                 Mth.lerp(partialTick, pz[i], z[i]));
     }
 
-    /** Advances the simulation by one tick. {@code handAnchor} is where the player holds the hose. */
-    public void step(Level level, Vec3 handAnchor) {
+    /**
+     * Advances the simulation by one tick. {@code owner} is the player holding the hose (used as the
+     * non-null entity for path raycasts); {@code handAnchor} is where they hold it.
+     */
+    public void step(Level level, Player owner, Vec3 handAnchor) {
         // Teleports (or NaN from some pathological state) can't be simulated across - re-drape.
         double endJumpSq = distSqTo(count - 1, handAnchor);
         if (!Double.isFinite(endJumpSq) || endJumpSq > TELEPORT_RESET_DISTANCE * TELEPORT_RESET_DISTANCE) {
@@ -110,7 +114,7 @@ public final class HoseRopeSimulation {
             return;
         }
 
-        updateDeployedLength(level, handAnchor);
+        updateDeployedLength(level, owner, handAnchor);
         resampleTo(desiredCount(deployedLength));
 
         int last = count - 1;
@@ -154,12 +158,12 @@ public final class HoseRopeSimulation {
      *       rope's actual draped arc; retracting further would drag it through the obstacle.</li>
      * </ul>
      */
-    private void updateDeployedLength(Level level, Vec3 handAnchor) {
+    private void updateDeployedLength(Level level, Player owner, Vec3 handAnchor) {
         double direct = pumpAnchor.distanceTo(handAnchor);
         double reach = direct + SLACK;
         if (reach > deployedLength) {
             deployedLength = reach;
-        } else if (HosePhysicsHandler.isHosePathClear(level, pumpAnchor, handAnchor)) {
+        } else if (HosePhysicsHandler.isHosePathClear(level, pumpAnchor, handAnchor, owner)) {
             deployedLength = Math.max(reach, deployedLength - RETRACT_RATE);
         } else {
             deployedLength = Math.max(arcLength(), deployedLength - RETRACT_RATE);

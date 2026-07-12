@@ -59,9 +59,10 @@ public class HosePhysicsHandler {
     // Is there an unobstructed straight run between two points, treating leaves as air the same way
     // the routing raycasts do? The client rope uses this to tell "the hose is just carrying slack"
     // (clear line - safe to reel in) from "the hose is wrapped around something" (blocked - hold the
-    // length so retracting can't yank it through a wall).
-    public static boolean isHosePathClear(Level level, Vec3 from, Vec3 to) {
-        return level.clip(new HoseClipContext(from, to, null)).getType() != HitResult.Type.BLOCK;
+    // length so retracting can't yank it through a wall). `entity` is the hose's owner and must be
+    // non-null: vanilla ClipContext dereferences it to build a collision context.
+    public static boolean isHosePathClear(Level level, Vec3 from, Vec3 to, Entity entity) {
+        return level.clip(new HoseClipContext(from, to, entity)).getType() != HitResult.Type.BLOCK;
     }
 
     public static class HoseState {
