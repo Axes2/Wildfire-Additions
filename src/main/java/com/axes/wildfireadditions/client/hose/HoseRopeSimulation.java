@@ -10,9 +10,9 @@ import net.minecraft.world.phys.Vec3;
 import net.minecraft.world.phys.shapes.VoxelShape;
 
 /**
- * Client-side verlet rope for one player's fire hose: a fixed chain of points integrated under
- * gravity, held together by stretch-only distance constraints, and collided against real block
- * collision shapes each solver iteration.
+ * Client-side verlet rope for one player's fire hose: a chain of points integrated under gravity,
+ * held together by stretch-only distance constraints, and collided against real block collision
+ * shapes each solver iteration.
  *
  * <p>Collision here is strictly local penetration resolution - a point is only ever moved when it is
  * physically inside a block's collision shape, and it is pushed out along the shallowest axis. There
@@ -20,14 +20,19 @@ import net.minecraft.world.phys.shapes.VoxelShape;
  * what hoisted the hose onto tree canopies when the player walked under leaves. Leaves are skipped
  * entirely (matching the server's routing raycasts), so foliage can neither lift nor snag the rope.
  *
+ * <p>The chain runs roughly one point per block ({@link #SEGMENT_LENGTH}), so the rope reads as a
+ * chunky, faceted line in keeping with the game's blocky style rather than a smooth spline. The
+ * active point count grows and shrinks with how much hose is currently paid out.
+ *
  * <p>The rope is purely visual. The server keeps its own coarse corner-chain for the gameplay rules
  * (taut warning, slowdown, snapping); this simulation only needs the pump position off the item.
  */
 public final class HoseRopeSimulation {
 
-    public static final int POINT_COUNT = 96;
     /** Half-thickness of the hose tube; collision keeps point centers this far off surfaces. */
     public static final double RADIUS = 0.11;
+    /** Target spacing between rope points. ~1 block gives the deliberately blocky, low-node look. */
+    public static final double SEGMENT_LENGTH = 1.0;
 
     private static final int CONSTRAINT_ITERATIONS = 6;
     /** Verlet gravity per tick^2. Tuned for a heavy, water-filled canvas hose rather than a whip. */
@@ -42,13 +47,15 @@ public final class HoseRopeSimulation {
     /** Pushing a point up costs "less" than sideways in collision resolution, so near-ties settle on top. */
     private static final double UP_BIAS = 0.66;
 
-    /** Extra length paid out beyond the straight-line need, so the hose drags with a natural droop. */
-    private static final double SLACK = 1.5;
-    /** How fast surplus length is reeled back in, in blocks per tick. Slow, so slack visibly lingers. */
-    private static final double REEL_IN_RATE = 0.05;
-    private static final double MIN_DEPLOYED = 3.0;
+    /** Constant droop kept beyond the straight-line need, so the hose hangs a little instead of a taut wire. */
+    private static final double SLACK = 1.25;
+    /** How fast surplus length is pulled back in, in blocks per tick (~8 b/s: keeps up with a sprint). */
+    private static final double RETRACT_RATE = 0.4;
+    private static final double MIN_DEPLOYED = 2.0;
     /** The visual rope can pay out right up to the length at which the server snaps the hose. */
     private static final double MAX_DEPLOYED = HosePhysicsHandler.MAX_HOSE_LENGTH + HosePhysicsHandler.SNAP_SLACK;
+    /** Fixed backing-array size: enough points for a full-length hose at one point per block, plus headroom. */
+    private static final int MAX_POINTS = (int) Math.ceil(MAX_DEPLOYED / SEGMENT_LENGTH) + 4;
     /** An end anchor jumping further than this in one tick means teleport/desync: re-drape from scratch. */
     private static final double TELEPORT_RESET_DISTANCE = 8.0;
 
@@ -56,18 +63,20 @@ public final class HoseRopeSimulation {
     private final Vec3 pumpAnchor;
 
     // Current and previous tick positions (verlet state + render interpolation), as flat arrays to
-    // avoid churning thousands of Vec3 allocations per tick.
-    private final double[] x = new double[POINT_COUNT];
-    private final double[] y = new double[POINT_COUNT];
-    private final double[] z = new double[POINT_COUNT];
-    private final double[] px = new double[POINT_COUNT];
-    private final double[] py = new double[POINT_COUNT];
-    private final double[] pz = new double[POINT_COUNT];
-    private final boolean[] grounded = new boolean[POINT_COUNT];
+    // avoid churning Vec3 allocations every tick. Only indices [0, count) are live.
+    private final double[] x = new double[MAX_POINTS];
+    private final double[] y = new double[MAX_POINTS];
+    private final double[] z = new double[MAX_POINTS];
+    private final double[] px = new double[MAX_POINTS];
+    private final double[] py = new double[MAX_POINTS];
+    private final double[] pz = new double[MAX_POINTS];
+    private final boolean[] grounded = new boolean[MAX_POINTS];
     // Scratch cursor for collision queries; the sim only ever runs on the client tick thread.
     private final BlockPos.MutableBlockPos collisionCursor = new BlockPos.MutableBlockPos();
 
-    /** Total rest length currently paid out of the pump, distributed evenly across all segments. */
+    /** Number of live points, always >= 2 (pump end + hand end). Tracks deployedLength at ~1/block. */
+    private int count;
+    /** Total rest length currently paid out of the pump, distributed evenly across the live points. */
     private double deployedLength;
 
     public HoseRopeSimulation(BlockPos pumpPos, Vec3 handAnchor) {
@@ -81,7 +90,7 @@ public final class HoseRopeSimulation {
     }
 
     public int pointCount() {
-        return POINT_COUNT;
+        return count;
     }
 
     /** Position of point {@code i} interpolated between the last two ticks, for smooth rendering. */
@@ -94,16 +103,17 @@ public final class HoseRopeSimulation {
 
     /** Advances the simulation by one tick. {@code handAnchor} is where the player holds the hose. */
     public void step(Level level, Vec3 handAnchor) {
-        int last = POINT_COUNT - 1;
-
         // Teleports (or NaN from some pathological state) can't be simulated across - re-drape.
-        double endJumpSq = distSqTo(last, handAnchor);
+        double endJumpSq = distSqTo(count - 1, handAnchor);
         if (!Double.isFinite(endJumpSq) || endJumpSq > TELEPORT_RESET_DISTANCE * TELEPORT_RESET_DISTANCE) {
             drape(handAnchor);
             return;
         }
 
-        updateDeployedLength(handAnchor);
+        updateDeployedLength(level, handAnchor);
+        resampleTo(desiredCount(deployedLength));
+
+        int last = count - 1;
         integrate(handAnchor);
 
         double restLength = deployedLength / last;
@@ -115,9 +125,15 @@ public final class HoseRopeSimulation {
         }
     }
 
+    private static int desiredCount(double length) {
+        return Mth.clamp((int) Math.round(length / SEGMENT_LENGTH) + 1, 2, MAX_POINTS);
+    }
+
     /** Lays the rope out in a straight line pump-to-hand with no velocity; collision untangles it. */
     private void drape(Vec3 handAnchor) {
-        int last = POINT_COUNT - 1;
+        deployedLength = Mth.clamp(pumpAnchor.distanceTo(handAnchor) + SLACK, MIN_DEPLOYED, MAX_DEPLOYED);
+        count = desiredCount(deployedLength);
+        int last = count - 1;
         for (int i = 0; i <= last; i++) {
             double t = i / (double) last;
             x[i] = px[i] = Mth.lerp(t, pumpAnchor.x, handAnchor.x);
@@ -125,29 +141,35 @@ public final class HoseRopeSimulation {
             z[i] = pz[i] = Mth.lerp(t, pumpAnchor.z, handAnchor.z);
             grounded[i] = false;
         }
-        deployedLength = Mth.clamp(pumpAnchor.distanceTo(handAnchor) + SLACK, MIN_DEPLOYED, MAX_DEPLOYED);
     }
 
     /**
-     * Pay-out model. Growing is immediate: the rope stretching past its rest length (walking away,
-     * or being forced the long way around an obstacle) pays out more hose at once. Reeling back in
-     * is slow and only happens when segments are genuinely compressed (hose piling up on the
-     * ground), so walking back toward the pump leaves believable slack lying around for a while.
+     * Pay-out model. The hose keeps just enough length to reach the player plus a constant droop, so
+     * running back and forth can't accumulate slack:
+     * <ul>
+     *   <li>Reaching further than the current length pays out immediately (walking away).</li>
+     *   <li>Otherwise, if the straight run back to the pump is clear, the length is reeled in toward
+     *       that straight-line need - the common open-terrain case, and what stops slack piling up.</li>
+     *   <li>If the run is blocked, the hose is wrapped around something, so we only trim down to the
+     *       rope's actual draped arc; retracting further would drag it through the obstacle.</li>
+     * </ul>
      */
-    private void updateDeployedLength(Vec3 handAnchor) {
-        double arc = arcLength();
+    private void updateDeployedLength(Level level, Vec3 handAnchor) {
         double direct = pumpAnchor.distanceTo(handAnchor);
-        if (arc > deployedLength * 1.02 || direct + SLACK * 0.5 > deployedLength) {
-            deployedLength = Math.max(arc, direct + SLACK);
-        } else if (deployedLength > arc + 2.0 * SLACK) {
-            deployedLength = Math.max(arc + SLACK, deployedLength - REEL_IN_RATE);
+        double reach = direct + SLACK;
+        if (reach > deployedLength) {
+            deployedLength = reach;
+        } else if (HosePhysicsHandler.isHosePathClear(level, pumpAnchor, handAnchor)) {
+            deployedLength = Math.max(reach, deployedLength - RETRACT_RATE);
+        } else {
+            deployedLength = Math.max(arcLength(), deployedLength - RETRACT_RATE);
         }
         deployedLength = Mth.clamp(deployedLength, MIN_DEPLOYED, MAX_DEPLOYED);
     }
 
     private double arcLength() {
         double total = 0;
-        for (int i = 0; i < POINT_COUNT - 1; i++) {
+        for (int i = 0; i < count - 1; i++) {
             double dx = x[i + 1] - x[i];
             double dy = y[i + 1] - y[i];
             double dz = z[i + 1] - z[i];
@@ -156,8 +178,62 @@ public final class HoseRopeSimulation {
         return total;
     }
 
+    /**
+     * Re-points the rope to {@code newCount} points by resampling the current chain at even arc-length
+     * intervals. Preserves the rope's shape and (approximately) each point's velocity, and keeps the
+     * pinned end points exactly, so paying out or reeling in hose changes the node density smoothly
+     * instead of popping.
+     */
+    private void resampleTo(int newCount) {
+        newCount = Mth.clamp(newCount, 2, MAX_POINTS);
+        if (newCount == count) return;
+
+        int oldLast = count - 1;
+        double[] cum = new double[count];
+        for (int i = 1; i < count; i++) {
+            double dx = x[i] - x[i - 1];
+            double dy = y[i] - y[i - 1];
+            double dz = z[i] - z[i - 1];
+            cum[i] = cum[i - 1] + Math.sqrt(dx * dx + dy * dy + dz * dz);
+        }
+        double total = cum[oldLast];
+
+        double[] nx = new double[newCount], ny = new double[newCount], nz = new double[newCount];
+        double[] npx = new double[newCount], npy = new double[newCount], npz = new double[newCount];
+
+        if (total < 1.0E-6) {
+            for (int j = 0; j < newCount; j++) {
+                nx[j] = x[0]; ny[j] = y[0]; nz[j] = z[0];
+                npx[j] = px[0]; npy[j] = py[0]; npz[j] = pz[0];
+            }
+        } else {
+            int seg = 0;
+            for (int j = 0; j < newCount; j++) {
+                double target = total * j / (newCount - 1);
+                while (seg < oldLast - 1 && cum[seg + 1] < target) seg++;
+                double segLen = cum[seg + 1] - cum[seg];
+                double f = segLen > 1.0E-9 ? (target - cum[seg]) / segLen : 0.0;
+                nx[j] = Mth.lerp(f, x[seg], x[seg + 1]);
+                ny[j] = Mth.lerp(f, y[seg], y[seg + 1]);
+                nz[j] = Mth.lerp(f, z[seg], z[seg + 1]);
+                npx[j] = Mth.lerp(f, px[seg], px[seg + 1]);
+                npy[j] = Mth.lerp(f, py[seg], py[seg + 1]);
+                npz[j] = Mth.lerp(f, pz[seg], pz[seg + 1]);
+            }
+        }
+
+        System.arraycopy(nx, 0, x, 0, newCount);
+        System.arraycopy(ny, 0, y, 0, newCount);
+        System.arraycopy(nz, 0, z, 0, newCount);
+        System.arraycopy(npx, 0, px, 0, newCount);
+        System.arraycopy(npy, 0, py, 0, newCount);
+        System.arraycopy(npz, 0, pz, 0, newCount);
+        for (int j = 0; j < newCount; j++) grounded[j] = false;
+        count = newCount;
+    }
+
     private void integrate(Vec3 handAnchor) {
-        int last = POINT_COUNT - 1;
+        int last = count - 1;
         for (int i = 1; i < last; i++) {
             double vx = (x[i] - px[i]) * AIR_DRAG;
             double vy = (y[i] - py[i]) * AIR_DRAG;
@@ -206,7 +282,7 @@ public final class HoseRopeSimulation {
      * ones are left alone so surplus hose compresses and piles instead of pushing itself straight.
      */
     private void solveDistanceConstraints(double restLength) {
-        int last = POINT_COUNT - 1;
+        int last = count - 1;
         for (int i = 0; i < last; i++) {
             double dx = x[i + 1] - x[i];
             double dy = y[i + 1] - y[i];
