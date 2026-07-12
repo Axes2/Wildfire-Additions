@@ -34,6 +34,11 @@ public class FireSprinklerRenderer implements BlockEntityRenderer<FireSprinklerB
     // than the chunk-baked base. Knock the colour down a bit so it blends in instead of standing out.
     private static final float SHADE = 0.1f;
 
+    // The head model's nozzle/barrel axis is authored 90 degrees off the yaw convention the aim math
+    // uses (which treats +Z as forward), so the head pointed a quarter-turn away from its target.
+    // Rotate the model this much extra to line the barrel up with what the turret is actually aiming at.
+    private static final float HEAD_MODEL_YAW_OFFSET = 90.0f;
+
     private final BlockRenderDispatcher blockRenderer;
 
     public FireSprinklerRenderer(BlockEntityRendererProvider.Context context) {
@@ -56,7 +61,7 @@ public class FireSprinklerRenderer implements BlockEntityRenderer<FireSprinklerB
         poseStack.pushPose();
         // Rotate the head about the block's central vertical axis (0.5, y, 0.5).
         poseStack.translate(0.5, 0.0, 0.5);
-        poseStack.mulPose(Axis.YP.rotationDegrees(yaw));
+        poseStack.mulPose(Axis.YP.rotationDegrees(yaw + HEAD_MODEL_YAW_OFFSET));
         poseStack.translate(-0.5, 0.0, -0.5);
 
         VertexConsumer consumer = buffer.getBuffer(RenderType.cutout());

@@ -49,18 +49,24 @@ public final class HoseRopeSimulation {
     /** Pushing a point up costs "less" than sideways in collision resolution, so near-ties settle on top. */
     private static final double UP_BIAS = 0.66;
 
-    /** Extra length paid out beyond the straight-line need, so the hose drags with a natural droop. */
-    private static final double SLACK = 1.5;
-    /** How fast surplus length is reeled back in, in blocks per tick. Slow, so slack visibly lingers. */
-    private static final double REEL_IN_RATE = 0.05;
-    private static final double MIN_DEPLOYED = 3.0;
+    /** Constant droop kept beyond the straight-line need, so the hose hangs a little instead of a taut wire. */
+    private static final double SLACK = 1.25;
+    /** How fast surplus length is pulled back in, in blocks per tick (~8 b/s: keeps up with a sprint). */
+    private static final double RETRACT_RATE = 0.4;
+    private static final double MIN_DEPLOYED = 2.0;
     /**
      * The visual rope can pay out right up to the length at which the server snaps the hose. Read live
-     * from config (not a constant) so it tracks the server's synced hose-length setting.
+     * (not a constant) so it tracks WildfireConfig's synced hose-length setting.
      */
     private static double maxDeployed() {
         return WildfireConfig.maxHoseLength() + WildfireConfig.hoseSnapSlack();
     }
+    /**
+     * Fixed backing-array size, at one point per block plus headroom. Sized from the config's hard
+     * upper bounds (maxHoseLength <= 512, snapSlack <= 128) rather than the live value, so the arrays
+     * never need to grow when the server config is set high.
+     */
+    private static final int MAX_POINTS = (int) Math.ceil((512.0 + 128.0) / SEGMENT_LENGTH) + 4;
     /** An end anchor jumping further than this in one tick means teleport/desync: re-drape from scratch. */
     private static final double TELEPORT_RESET_DISTANCE = 8.0;
 
@@ -139,7 +145,7 @@ public final class HoseRopeSimulation {
 
     /** Lays the rope out in a straight line pump-to-hand with no velocity; collision untangles it. */
     private void drape(Vec3 handAnchor) {
-        deployedLength = Mth.clamp(pumpAnchor.distanceTo(handAnchor) + SLACK, MIN_DEPLOYED, MAX_DEPLOYED);
+        deployedLength = Mth.clamp(pumpAnchor.distanceTo(handAnchor) + SLACK, MIN_DEPLOYED, maxDeployed());
         count = desiredCount(deployedLength);
         int last = count - 1;
         for (int i = 0; i <= last; i++) {
@@ -149,7 +155,6 @@ public final class HoseRopeSimulation {
             z[i] = pz[i] = Mth.lerp(t, pumpAnchor.z, handAnchor.z);
             grounded[i] = false;
         }
-        deployedLength = Mth.clamp(pumpAnchor.distanceTo(handAnchor) + SLACK, MIN_DEPLOYED, maxDeployed());
     }
 
     /**

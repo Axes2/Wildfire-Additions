@@ -25,6 +25,7 @@ public class WildfireAdditions {
         ModAttachments.ATTACHMENT_TYPES.register(modEventBus);
         ModRecipes.RECIPE_SERIALIZERS.register(modEventBus);
         ModParticles.PARTICLE_TYPES.register(modEventBus);
+        ModSounds.SOUND_EVENTS.register(modEventBus);
 
         // Register configs. STARTUP is registered first because the sprayer reads its charge pool from it
         // when items are built (during the registry events dispatched right after this constructor); a
