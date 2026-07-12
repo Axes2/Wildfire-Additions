@@ -11,6 +11,7 @@ import net.minecraft.network.chat.Component;
 import net.minecraft.tags.BlockTags;
 import net.minecraft.world.effect.MobEffectInstance;
 import net.minecraft.world.effect.MobEffects;
+import net.minecraft.world.entity.Entity;
 import net.minecraft.world.entity.player.Player;
 import net.minecraft.world.item.ItemStack;
 import net.minecraft.world.item.component.CustomData;
@@ -56,6 +57,15 @@ public class HosePhysicsHandler {
     // collision pass so gameplay and visuals never disagree about what is solid.
     public static boolean blocksHose(BlockState state) {
         return !state.isAir() && !state.is(BlockTags.LEAVES);
+    }
+
+    // Is there an unobstructed straight run between two points, treating leaves as air the same way
+    // the routing raycasts do? The client rope uses this to tell "the hose is just carrying slack"
+    // (clear line - safe to reel in) from "the hose is wrapped around something" (blocked - hold the
+    // length so retracting can't yank it through a wall). `entity` is the hose's owner and must be
+    // non-null: vanilla ClipContext dereferences it to build a collision context.
+    public static boolean isHosePathClear(Level level, Vec3 from, Vec3 to, Entity entity) {
+        return level.clip(new HoseClipContext(from, to, entity)).getType() != HitResult.Type.BLOCK;
     }
 
     public static class HoseState {
@@ -276,8 +286,8 @@ public class HosePhysicsHandler {
     // The routing raycast the hose lives by: an ordinary COLLIDER clip, except that anything
     // blocksHose() rules out (leaves) is treated as pure air.
     private static final class HoseClipContext extends ClipContext {
-        HoseClipContext(Vec3 from, Vec3 to, Player player) {
-            super(from, to, ClipContext.Block.COLLIDER, ClipContext.Fluid.NONE, player);
+        HoseClipContext(Vec3 from, Vec3 to, Entity entity) {
+            super(from, to, ClipContext.Block.COLLIDER, ClipContext.Fluid.NONE, entity);
         }
 
         @Override

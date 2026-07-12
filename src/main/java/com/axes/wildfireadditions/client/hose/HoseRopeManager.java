@@ -68,7 +68,7 @@ public final class HoseRopeManager {
                 rope = new HoseRopeSimulation(pumpPos, handAnchor);
                 ROPES.put(player.getUUID(), rope);
             }
-            rope.step(level, handAnchor);
+            rope.step(level, player, handAnchor);
             active.add(player.getUUID());
         }
 

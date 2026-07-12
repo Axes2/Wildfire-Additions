@@ -7,6 +7,7 @@ import com.axes.wildfireadditions.registry.ModBlocks;
 import com.axes.wildfireadditions.registry.ModItems;
 import com.axes.wildfireadditions.registry.ModParticles;
 import com.axes.wildfireadditions.registry.ModRecipes;
+import com.axes.wildfireadditions.registry.ModSounds;
 import net.neoforged.bus.api.IEventBus;
 import net.neoforged.fml.ModContainer;
 import net.neoforged.fml.common.Mod;

@@ -37,9 +37,6 @@ public class HoseRenderHandler {
     // sits exactly on the surfaces the physics resolved against - never clipping in, never floating.
     private static final float THICKNESS = (float) HoseRopeSimulation.RADIUS;
     private static final double TEXTURE_TILE_LENGTH = 1.0; // The hose texture repeats once per block of length
-    // Extra points sampled between each pair of simulation points (Catmull-Rom), so the tube bends
-    // in gentle curves instead of showing the simulation's ~0.5-block segments as facets.
-    private static final int SMOOTHING_SUBDIVISIONS = 2;
 
     @SubscribeEvent
     public static void onRenderLevelStage(RenderLevelStageEvent event) {
@@ -70,45 +67,16 @@ public class HoseRenderHandler {
         poseStack.popPose();
     }
 
+    // The rope points are already ~1 block apart and are rendered as straight segments between each
+    // pair - no smoothing spline - so the hose reads as a chunky, faceted line that matches the
+    // game's blocky style rather than a rounded cable.
     private static List<Vec3> buildPath(HoseRopeSimulation rope, float partialTick) {
         int count = rope.pointCount();
         List<Vec3> points = new ArrayList<>(count);
         for (int i = 0; i < count; i++) {
             points.add(rope.getRenderPoint(i, partialTick));
         }
-        return smoothPath(points);
-    }
-
-    // Catmull-Rom subdivision through the simulation points. The curve passes through every original
-    // point, so it never drifts away from what the physics resolved - it only rounds off the corners
-    // between them (deviation is a couple of centimetres at most, well inside the collision skin).
-    private static List<Vec3> smoothPath(List<Vec3> points) {
-        int n = points.size();
-        if (n < 3 || SMOOTHING_SUBDIVISIONS < 1) return points;
-
-        List<Vec3> smoothed = new ArrayList<>((n - 1) * (SMOOTHING_SUBDIVISIONS + 1) + 1);
-        for (int i = 0; i < n - 1; i++) {
-            Vec3 p0 = points.get(Math.max(0, i - 1));
-            Vec3 p1 = points.get(i);
-            Vec3 p2 = points.get(i + 1);
-            Vec3 p3 = points.get(Math.min(n - 1, i + 2));
-
-            smoothed.add(p1);
-            for (int s = 1; s <= SMOOTHING_SUBDIVISIONS; s++) {
-                smoothed.add(catmullRom(p0, p1, p2, p3, s / (float) (SMOOTHING_SUBDIVISIONS + 1)));
-            }
-        }
-        smoothed.add(points.get(n - 1));
-        return smoothed;
-    }
-
-    private static Vec3 catmullRom(Vec3 p0, Vec3 p1, Vec3 p2, Vec3 p3, float t) {
-        double t2 = t * t;
-        double t3 = t2 * t;
-        return new Vec3(
-                0.5 * (2.0 * p1.x + (p2.x - p0.x) * t + (2.0 * p0.x - 5.0 * p1.x + 4.0 * p2.x - p3.x) * t2 + (3.0 * p1.x - p0.x - 3.0 * p2.x + p3.x) * t3),
-                0.5 * (2.0 * p1.y + (p2.y - p0.y) * t + (2.0 * p0.y - 5.0 * p1.y + 4.0 * p2.y - p3.y) * t2 + (3.0 * p1.y - p0.y - 3.0 * p2.y + p3.y) * t3),
-                0.5 * (2.0 * p1.z + (p2.z - p0.z) * t + (2.0 * p0.z - 5.0 * p1.z + 4.0 * p2.z - p3.z) * t2 + (3.0 * p1.z - p0.z - 3.0 * p2.z + p3.z) * t3));
+        return points;
     }
 
     // Extrudes a single continuous tube along `path`. Cross-section rings are computed per vertex
