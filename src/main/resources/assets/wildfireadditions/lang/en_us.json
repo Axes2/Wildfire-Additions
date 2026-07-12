@@ -19,5 +19,7 @@
 	"message.wildfireadditions.tank_switched": "Tank now drawing %s",
 	"message.wildfireadditions.no_tank": "This aircraft has no firefighting tank",
 	"message.wildfireadditions.no_cargo": "This aircraft has no cargo to draw from",
-	"message.wildfireadditions.out_of_fluid": "No %s buckets in the aircraft's cargo"
+	"message.wildfireadditions.out_of_fluid": "No %s buckets in the aircraft's cargo",
+	"subtitles.wildfireadditions.hose_spray": "Hose sprays",
+	"subtitles.wildfireadditions.sprinkler_spray": "Sprinkler sprays"
 }

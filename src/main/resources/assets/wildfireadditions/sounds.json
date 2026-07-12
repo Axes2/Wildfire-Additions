@@ -1,0 +1,16 @@
+{
+  "hose_spray": {
+    "category": "player",
+    "subtitle": "subtitles.wildfireadditions.hose_spray",
+    "sounds": [
+      { "name": "wildfireadditions:spray_loop", "stream": false }
+    ]
+  },
+  "sprinkler_spray": {
+    "category": "block",
+    "subtitle": "subtitles.wildfireadditions.sprinkler_spray",
+    "sounds": [
+      { "name": "wildfireadditions:spray_loop", "stream": false }
+    ]
+  }
+}
