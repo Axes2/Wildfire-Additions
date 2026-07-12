@@ -1,5 +1,6 @@
 package com.axes.wildfireadditions.coating;
 
+import com.axes.wildfireadditions.config.WildfireConfig;
 import com.axes.wildfireadditions.network.CoatingSync;
 import com.axes.wildfireadditions.registry.ModAttachments;
 import it.unimi.dsi.fastutil.longs.LongOpenHashSet;
@@ -27,7 +28,7 @@ import java.util.Map;
  */
 public final class RetardantCoating {
 
-    /** How long a coating lasts, in game ticks: 10 minutes * 60s * 20 ticks. */
+    /** Default coating lifetime in game ticks (10 minutes); the live value is {@code coatingLifetimeTicks}. */
     public static final int EXPIRY_TICKS = 10 * 60 * 20;
 
     private static final Map<ResourceKey<Level>, LongSet> ACTIVE_CHUNKS = new HashMap<>();
@@ -41,7 +42,7 @@ public final class RetardantCoating {
      * is - this is only ever called for a block the player just clicked).
      */
     public static void coat(ServerLevel level, BlockPos pos) {
-        long expiry = level.getGameTime() + EXPIRY_TICKS;
+        long expiry = level.getGameTime() + WildfireConfig.coatingLifetimeTicks();
         ChunkAccess chunk = level.getChunk(pos.getX() >> 4, pos.getZ() >> 4);
         ChunkCoatingData data = chunk.getData(ModAttachments.COATING.get());
         data.put(pos.asLong(), expiry);

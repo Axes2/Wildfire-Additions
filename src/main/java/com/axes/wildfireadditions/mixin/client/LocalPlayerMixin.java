@@ -1,5 +1,6 @@
 package com.axes.wildfireadditions.mixin.client;
 
+import com.axes.wildfireadditions.config.WildfireConfig;
 import com.axes.wildfireadditions.item.ReducedUseSlowdownItem;
 import net.minecraft.client.player.LocalPlayer;
 import org.spongepowered.asm.mixin.Mixin;
@@ -28,7 +29,7 @@ public class LocalPlayerMixin {
     private float wildfireadditions$softenUseSlowdown(float original) {
         LocalPlayer self = (LocalPlayer) (Object) this;
         if (self.isUsingItem() && self.getUseItem().getItem() instanceof ReducedUseSlowdownItem) {
-            return ReducedUseSlowdownItem.USE_MOVEMENT_MULTIPLIER;
+            return WildfireConfig.useMovementMultiplier();
         }
         return original;
     }

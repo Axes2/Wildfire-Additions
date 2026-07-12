@@ -1,6 +1,7 @@
 package com.axes.wildfireadditions.event;
 
 import com.axes.wildfireadditions.WildfireAdditions;
+import com.axes.wildfireadditions.config.WildfireConfig;
 import com.axes.wildfireadditions.registry.ModBlocks;
 import com.axes.wildfireadditions.registry.ModItems;
 import net.minecraft.core.BlockPos;
@@ -33,10 +34,12 @@ import java.util.*;
 @EventBusSubscriber(modid = WildfireAdditions.MODID)
 public class HosePhysicsHandler {
 
-    // Also read by the client-side rope simulation so the visual hose runs out of slack at the same
+    // Default routed length before the hose pulls taut, and default snap slack past it. The live values
+    // come from config (WildfireConfig.maxHoseLength()/hoseSnapSlack()); the client-side rope simulation
+    // reads the same config (synced from the server) so the visual hose runs out of slack at the same
     // distance the server starts fighting back.
     public static final double MAX_HOSE_LENGTH = 50.0;
-    public static final double SNAP_SLACK = 6.0; // How far past max length the hose stretches before snapping
+    public static final double SNAP_SLACK = 6.0;
     private static final int MAX_NODES = 48; // Safety cap so pathological geometry can't grow the chain forever
     private static final double REJOIN_RADIUS = 1.0; // Standing this close to a kink counts as having retraced past it
     private static final Map<UUID, HoseState> ACTIVE_HOSES = new HashMap<>();
@@ -127,10 +130,11 @@ public class HosePhysicsHandler {
         }
         totalLength += state.nodes.getLast().distanceTo(player.position());
 
-        if (totalLength > MAX_HOSE_LENGTH) {
+        double maxLength = WildfireConfig.maxHoseLength();
+        if (totalLength > maxLength) {
             player.addEffect(new MobEffectInstance(MobEffects.MOVEMENT_SLOWDOWN, 20, 4, false, false, false));
             player.displayClientMessage(Component.literal("The hose is pulling taut!").withStyle(net.minecraft.ChatFormatting.RED), true);
-            if (totalLength > MAX_HOSE_LENGTH + SNAP_SLACK) {
+            if (totalLength > maxLength + WildfireConfig.hoseSnapSlack()) {
                 snapHose(player, hoseStack);
                 return;
             }

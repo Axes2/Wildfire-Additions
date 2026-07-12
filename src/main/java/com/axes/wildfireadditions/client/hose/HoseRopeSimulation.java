@@ -1,5 +1,6 @@
 package com.axes.wildfireadditions.client.hose;
 
+import com.axes.wildfireadditions.config.WildfireConfig;
 import com.axes.wildfireadditions.event.HosePhysicsHandler;
 import net.minecraft.core.BlockPos;
 import net.minecraft.util.Mth;
@@ -48,15 +49,18 @@ public final class HoseRopeSimulation {
     /** Pushing a point up costs "less" than sideways in collision resolution, so near-ties settle on top. */
     private static final double UP_BIAS = 0.66;
 
-    /** Constant droop kept beyond the straight-line need, so the hose hangs a little instead of a taut wire. */
-    private static final double SLACK = 1.25;
-    /** How fast surplus length is pulled back in, in blocks per tick (~8 b/s: keeps up with a sprint). */
-    private static final double RETRACT_RATE = 0.4;
-    private static final double MIN_DEPLOYED = 2.0;
-    /** The visual rope can pay out right up to the length at which the server snaps the hose. */
-    private static final double MAX_DEPLOYED = HosePhysicsHandler.MAX_HOSE_LENGTH + HosePhysicsHandler.SNAP_SLACK;
-    /** Fixed backing-array size: enough points for a full-length hose at one point per block, plus headroom. */
-    private static final int MAX_POINTS = (int) Math.ceil(MAX_DEPLOYED / SEGMENT_LENGTH) + 4;
+    /** Extra length paid out beyond the straight-line need, so the hose drags with a natural droop. */
+    private static final double SLACK = 1.5;
+    /** How fast surplus length is reeled back in, in blocks per tick. Slow, so slack visibly lingers. */
+    private static final double REEL_IN_RATE = 0.05;
+    private static final double MIN_DEPLOYED = 3.0;
+    /**
+     * The visual rope can pay out right up to the length at which the server snaps the hose. Read live
+     * from config (not a constant) so it tracks the server's synced hose-length setting.
+     */
+    private static double maxDeployed() {
+        return WildfireConfig.maxHoseLength() + WildfireConfig.hoseSnapSlack();
+    }
     /** An end anchor jumping further than this in one tick means teleport/desync: re-drape from scratch. */
     private static final double TELEPORT_RESET_DISTANCE = 8.0;
 
@@ -145,6 +149,7 @@ public final class HoseRopeSimulation {
             z[i] = pz[i] = Mth.lerp(t, pumpAnchor.z, handAnchor.z);
             grounded[i] = false;
         }
+        deployedLength = Mth.clamp(pumpAnchor.distanceTo(handAnchor) + SLACK, MIN_DEPLOYED, maxDeployed());
     }
 
     /**
@@ -168,7 +173,7 @@ public final class HoseRopeSimulation {
         } else {
             deployedLength = Math.max(arcLength(), deployedLength - RETRACT_RATE);
         }
-        deployedLength = Mth.clamp(deployedLength, MIN_DEPLOYED, MAX_DEPLOYED);
+        deployedLength = Mth.clamp(deployedLength, MIN_DEPLOYED, maxDeployed());
     }
 
     private double arcLength() {

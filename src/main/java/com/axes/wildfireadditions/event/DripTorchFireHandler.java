@@ -1,13 +1,13 @@
 package com.axes.wildfireadditions.event;
 
 import com.axes.wildfireadditions.WildfireAdditions;
+import com.axes.wildfireadditions.config.WildfireConfig;
 import dev.protomanly.pmweather.block.ModBlocks;
 import dev.protomanly.pmweather.block.PMWFireBlock;
 import dev.protomanly.pmweather.data.DataAttachments;
 import net.minecraft.core.BlockPos;
 import net.minecraft.core.Direction;
 import net.minecraft.core.particles.ParticleTypes;
-import net.minecraft.resources.ResourceKey;
 import net.minecraft.server.level.ServerLevel;
 import net.minecraft.tags.BlockTags;
 import net.minecraft.world.level.ChunkPos;
@@ -21,8 +21,6 @@ import net.neoforged.neoforge.event.tick.LevelTickEvent;
 
 import java.util.ArrayList;
 import java.util.Collections;
-import java.util.HashMap;
-import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 
@@ -117,6 +115,7 @@ public class DripTorchFireHandler {
     // Raised substantially: a wide, slow-advancing backfire that's actually starving a fire line of
     // fuel needs far more simultaneously-tracked embers than a thin trail ever did. Affordable because
     // the only per-ember work each tick is one cheap block-state read (the intensity clamp).
+    // Default only; the live cap is WildfireConfig.maxTrackedEmbers().
     private static final int MAX_EMBERS = 4000;
 
     // The intensity clamp is one block-state read (plus a write only when it fires) per tracked ember.
@@ -167,18 +166,31 @@ public class DripTorchFireHandler {
     private static final int PARTICLE_PERIOD = 3; // Ticks between cosmetic flame bursts.
     private static final float PARTICLE_CHANCE = 0.02f; // Per-ember chance each burst - keeps totals bounded.
 
-    // ember position -> remaining no-fire outward-spread budget. A map (not a set) so each ember can
-    // carry how many more times its lineage may push outward when there's no fire to creep toward.
-    private static final Map<ResourceKey<Level>, Map<BlockPos, Integer>> EMBERS = new HashMap<>();
+    // Tracked embers live in per-dimension SavedData (see DripTorchEmberData): ember position ->
+    // remaining no-fire outward-spread budget. Persisting them is what keeps a backburn recognised as
+    // ours - and therefore still intensity-clamped by PMWFireBlockMixin - across a server restart,
+    // instead of coming back as untracked fire that could spread. It also means there's no static state
+    // to leak or bleed between worlds: the storage is owned by, and dies with, its ServerLevel.
+    private static DripTorchEmberData store(ServerLevel level) {
+        return level.getDataStorage().computeIfAbsent(DripTorchEmberData.FACTORY, DripTorchEmberData.ID);
+    }
 
     /**
      * True if {@code pos} is a drip-torch ember we're actively managing in {@code level}. Read by
      * {@link com.axes.wildfireadditions.mixin.PMWFireBlockMixin} so it only ever clamps <i>our</i>
-     * fire's random-tick intensity, never the wildfire's.
+     * fire's random-tick intensity, never the wildfire's. Only server fire random-ticks, so a
+     * non-server level (no ember storage) is never one of ours.
      */
     public static boolean isTrackedEmber(Level level, BlockPos pos) {
-        Map<BlockPos, Integer> set = EMBERS.get(level.dimension());
-        return set != null && set.containsKey(pos);
+        if (!(level instanceof ServerLevel server)) return false;
+        return store(server).view().containsKey(pos);
+    }
+
+    // Whether pos's chunk is currently loaded, without forcing it to load. Level.getBlockState
+    // resolves through getChunk(..., create=true), so every unguarded read here would drag an
+    // unloaded chunk back in; callers use this to leave dormant embers untouched instead.
+    private static boolean isLoaded(ServerLevel level, BlockPos pos) {
+        return level.hasChunk(pos.getX() >> 4, pos.getZ() >> 4);
     }
 
     /**
@@ -194,8 +206,9 @@ public class DripTorchFireHandler {
 
     private static boolean plantEmber(ServerLevel level, BlockPos pos, int spreadBudget) {
         pos = pos.immutable();
-        Map<BlockPos, Integer> set = EMBERS.computeIfAbsent(level.dimension(), k -> new LinkedHashMap<>());
-        if (set.size() >= MAX_EMBERS) return false;
+        DripTorchEmberData data = store(level);
+        Map<BlockPos, Integer> set = data.view();
+        if (set.size() >= WildfireConfig.maxTrackedEmbers()) return false;
 
         // Never overwrite existing fire - that includes our own embers, but critically also the
         // wildfire itself, which we must never override. (Fire may be in the REPLACEABLE tag below, so
@@ -223,29 +236,33 @@ public class DripTorchFireHandler {
         BlockState fire = ModBlocks.FIRE.get().defaultBlockState().setValue(PMWFireBlock.INTENSITY, START_INTENSITY);
         level.setBlockAndUpdate(pos, fire);
         set.put(pos, spreadBudget);
+        data.setDirty();
         return true;
     }
 
     private static int randomSpreadBudget(ServerLevel level) {
-        return NO_FIRE_SPREAD_MIN + level.random.nextInt(NO_FIRE_SPREAD_MAX - NO_FIRE_SPREAD_MIN + 1);
+        int min = WildfireConfig.dripTorchClearRadiusMin();
+        int max = WildfireConfig.dripTorchClearRadiusMax();
+        return min + level.random.nextInt(max - min + 1);
     }
 
     @SubscribeEvent
     public static void onLevelTick(LevelTickEvent.Post event) {
         if (event.getLevel().isClientSide()) return;
         ServerLevel level = (ServerLevel) event.getLevel();
-        Map<BlockPos, Integer> set = EMBERS.get(level.dimension());
-        if (set == null || set.isEmpty()) return;
+        DripTorchEmberData data = store(level);
+        Map<BlockPos, Integer> set = data.view();
+        if (set.isEmpty()) return;
 
         long time = level.getGameTime();
         if (time % CLAMP_PERIOD == 0) {
-            clampIntensity(level, set);
+            clampIntensity(level, data);
         }
         if (time % PARTICLE_PERIOD == 0) {
             emitEmberParticles(level, set);
         }
         if (time % CREEP_PERIOD == 0) {
-            creepTowardFire(level, set);
+            creepTowardFire(level, data);
         }
     }
 
@@ -253,10 +270,16 @@ public class DripTorchFireHandler {
     // guarantees an ember's randomTick never computes above the cap, so this pass is defensive - it
     // resets the stored value between game ticks - but its load-bearing job is pruning: an ember whose
     // block is no longer fire has burned out and leaves the set here.
-    private static void clampIntensity(ServerLevel level, Map<BlockPos, Integer> set) {
+    private static void clampIntensity(ServerLevel level, DripTorchEmberData data) {
+        Map<BlockPos, Integer> set = data.view();
         List<BlockPos> toRemove = new ArrayList<>();
 
         for (BlockPos pos : set.keySet()) {
+            // Never force-load a chunk just to check an ember. An ember in an unloaded chunk is dormant:
+            // leave it tracked and re-check it once its chunk loads again (matching RetardantFireHandler),
+            // rather than pulling the chunk back in every tick - which would pin abandoned backburns loaded
+            // and, because such chunks don't random-tick, keep those embers alive forever.
+            if (!isLoaded(level, pos)) continue;
             BlockState state = level.getBlockState(pos);
             if (!(state.getBlock() instanceof PMWFireBlock)) {
                 toRemove.add(pos); // Burned out or consumed - nothing left to manage.
@@ -272,6 +295,7 @@ public class DripTorchFireHandler {
         for (BlockPos pos : toRemove) {
             set.remove(pos);
         }
+        if (!toRemove.isEmpty()) data.setDirty();
     }
 
     // Cosmetic only. The fire block is capped at a low intensity for safety (see class doc), so
@@ -282,6 +306,7 @@ public class DripTorchFireHandler {
     // just the RNG roll.
     private static void emitEmberParticles(ServerLevel level, Map<BlockPos, Integer> set) {
         for (BlockPos pos : set.keySet()) {
+            if (!isLoaded(level, pos)) continue; // No viewers near a dormant ember; nothing to show.
             if (level.random.nextFloat() >= PARTICLE_CHANCE) continue;
             double x = pos.getX() + 0.5, y = pos.getY() + 0.15, z = pos.getZ() + 0.5;
             level.sendParticles(ParticleTypes.FLAME, x, y, z, 2, 0.22, 0.08, 0.22, 0.01);
@@ -298,8 +323,9 @@ public class DripTorchFireHandler {
     // bounded outward foliage-clearing spread (see spreadOutward). The frontier is shuffled before the
     // budget is applied so a large tracked set advances as one even front rather than a few embers
     // monopolising every pass.
-    private static void creepTowardFire(ServerLevel level, Map<BlockPos, Integer> set) {
-        if (set.size() >= MAX_EMBERS) return;
+    private static void creepTowardFire(ServerLevel level, DripTorchEmberData data) {
+        Map<BlockPos, Integer> set = data.view();
+        if (set.size() >= WildfireConfig.maxTrackedEmbers()) return;
 
         // The idle outward clear runs on a slower cadence than the toward-fire creep (see
         // NO_FIRE_SPREAD_PERIOD). Toward-fire steps still happen every pass; the no-fire ring is only
@@ -311,7 +337,10 @@ public class DripTorchFireHandler {
         int attempts = 0;
 
         for (BlockPos ember : frontier) {
-            if (attempts >= CREEP_BUDGET || set.size() >= MAX_EMBERS) break;
+            if (attempts >= CREEP_BUDGET || set.size() >= WildfireConfig.maxTrackedEmbers()) break;
+            // Skip embers whose chunk is unloaded - creeping from one would force-load it (and the
+            // chunks its fire/ground scan reaches into) purely to advance a fire nobody is watching.
+            if (!isLoaded(level, ember)) continue;
 
             BlockPos fineTarget = findNearestWildfire(level, set, ember);
             if (fineTarget != null) {
@@ -339,6 +368,7 @@ public class DripTorchFireHandler {
             attempts++;
             spreadOutward(level, set, ember, budget);
             set.put(ember, SPENT);
+            data.setDirty();
         }
     }
 
@@ -349,7 +379,7 @@ public class DripTorchFireHandler {
     private static void spreadOutward(ServerLevel level, Map<BlockPos, Integer> set, BlockPos ember, int budget) {
         int childBudget = budget - 1;
         for (Direction dir : Direction.Plane.HORIZONTAL) {
-            if (set.size() >= MAX_EMBERS) return;
+            if (set.size() >= WildfireConfig.maxTrackedEmbers()) return;
             int tx = ember.getX() + dir.getStepX();
             int tz = ember.getZ() + dir.getStepZ();
             BlockPos top = level.getHeightmapPos(Heightmap.Types.MOTION_BLOCKING_NO_LEAVES, new BlockPos(tx, 0, tz));
@@ -387,6 +417,7 @@ public class DripTorchFireHandler {
             for (int dz = -FINE_SCAN_RADIUS; dz <= FINE_SCAN_RADIUS; dz++) {
                 for (int dy = -FINE_SCAN_VERTICAL; dy <= FINE_SCAN_VERTICAL; dy++) {
                     m.set(origin.getX() + dx, origin.getY() + dy, origin.getZ() + dz);
+                    if (!isLoaded(level, m)) continue; // Don't force-load a neighbour chunk to scan it.
                     if (!(level.getBlockState(m).getBlock() instanceof PMWFireBlock)) continue;
                     if (set.containsKey(m)) continue; // One of ours, not the wildfire.
 
