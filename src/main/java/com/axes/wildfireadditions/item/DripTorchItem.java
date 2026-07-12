@@ -84,6 +84,11 @@ public class DripTorchItem extends Item implements ReducedUseSlowdownItem {
         if (DripTorchFireHandler.plantEmber(serverLevel, top)) {
             level.playSound(null, top, SoundEvents.FLINTANDSTEEL_USE, SoundSource.PLAYERS,
                     0.5f, 1.2f + (level.random.nextFloat() * 0.2f));
+
+            // Wear it like a normal tool: one point of fuel per ground ignition, and it breaks (with the
+            // vanilla break effect) once spent. hurtAndBreak ignores creative players and only bites on
+            // the server, so no instabuild guard is needed here.
+            stack.hurtAndBreak(1, player, LivingEntity.getSlotForHand(player.getUsedItemHand()));
         }
     }
 }

@@ -25,7 +25,7 @@ public class ModItems {
             () -> new HoseItem(new Item.Properties().stacksTo(1)));
 
     public static final DeferredItem<Item> DRIP_TORCH = ITEMS.register("drip_torch",
-            () -> new DripTorchItem(new Item.Properties().stacksTo(1)));
+            () -> new DripTorchItem(new Item.Properties().durability(WildfireConfig.dripTorchDurability())));
 
     public static final DeferredItem<Item> RETARDANT_SPRAYER = ITEMS.register("retardant_sprayer",
             () -> new RetardantSprayerItem(new Item.Properties().durability(WildfireConfig.sprayerDurability())));

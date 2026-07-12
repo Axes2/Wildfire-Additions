@@ -13,8 +13,9 @@ import org.apache.commons.lang3.tuple.Pair;
  *       them (e.g. the hose length the client rope obeys) through NeoForge's built-in config sync.</li>
  *   <li><b>CLIENT</b> ({@code wildfireadditions-client.toml}, per-client): purely local look-and-feel
  *       and rendering-cost settings. Changing these never affects other players.</li>
- *   <li><b>STARTUP</b> ({@code wildfireadditions-startup.toml}): the single value that must be known at
- *       item-registration time (the sprayer's charge pool). STARTUP configs are loaded during mod
+ *   <li><b>STARTUP</b> ({@code wildfireadditions-startup.toml}): the values that must be known at
+ *       item-registration time (the sprayer's charge pool and the drip torch's durability). STARTUP
+ *       configs are loaded during mod
  *       loading - early enough to be read when items are built - whereas a per-world SERVER config
  *       does not exist yet at that point.</li>
  * </ul>
@@ -138,6 +139,20 @@ public final class WildfireConfig {
             return STARTUP.sprayerDurability.get();
         } catch (IllegalStateException notLoadedYet) {
             return 256;
+        }
+    }
+
+    /**
+     * The drip torch's durability pool, baked into the item at registration. Like
+     * {@link #sprayerDurability()} it comes from the STARTUP config, which is loaded early enough to be
+     * read as items are built; guarded so a read before the config has loaded falls back to the default
+     * rather than throwing.
+     */
+    public static int dripTorchDurability() {
+        try {
+            return STARTUP.dripTorchDurability.get();
+        } catch (IllegalStateException notLoadedYet) {
+            return 90;
         }
     }
 
@@ -277,6 +292,7 @@ public final class WildfireConfig {
 
     public static final class Startup {
         public final ModConfigSpec.IntValue sprayerDurability;
+        public final ModConfigSpec.IntValue dripTorchDurability;
 
         Startup(ModConfigSpec.Builder builder) {
             builder.comment("Wildfire Additions - values needed when items are first registered.");
@@ -285,6 +301,13 @@ public final class WildfireConfig {
                     .comment("The retardant sprayer's full charge pool: one point is spent per new block it",
                             "coats")
                     .defineInRange("sprayerDurability", 256, 1, 100_000);
+            builder.pop();
+
+            builder.push("drip_torch");
+            dripTorchDurability = builder
+                    .comment("The drip torch's durability: one point is spent each time it lights the ground,",
+                            "and it breaks like a normal tool once exhausted. Default 90.")
+                    .defineInRange("dripTorchDurability", 90, 1, 100_000);
             builder.pop();
         }
     }
